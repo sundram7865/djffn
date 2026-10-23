@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # One image runs the whole product: FastAPI serves the JSON API and the built React app.
 
 # ---- 1. Build the React frontend -------------------------------------------------------------
