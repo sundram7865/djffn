@@ -1,0 +1,466 @@
+"""Builds view payloads from the in-memory snapshot, with memoisation.
+
+The snapshot is immutable and small (~20k forecast rows), so every request is computed from it
+in milliseconds and cached by its (hashable) arguments. The browser never waits on Elexon.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Hashable
+from datetime import date, time, timedelta
+from functools import lru_cache
+from threading import Lock
+from typing import Any, TypeVar, cast
+
+import numpy as np
+import pandas as pd
+
+from app.config import CUTOFF_PRESETS, MARKET_TZ, WIND_BANDS, Settings, settings
+from app.core.insights import build_insights
+from app.core.metrics import (
+    assign_bands,
+    band_quantiles,
+    error_summary,
+    group_summary,
+    histogram,
+    horizon_buckets,
+)
+from app.core.selection import (
+    all_versions_with_actuals,
+    join_actuals,
+    parse_cutoff,
+    select_forecasts,
+    target_grid,
+)
+from app.data.store import Snapshot, get_snapshot
+
+T = TypeVar("T")
+ISO = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _iso(ts: pd.Timestamp) -> str:
+    return ts.tz_convert("UTC").strftime(ISO)
+
+
+def _num(v: Any) -> float | None:
+    return None if v is None or pd.isna(v) else float(v)
+
+
+def fmt_cutoff(t: time) -> str:
+    return f"{t.hour:02d}:{t.minute:02d}"
+
+
+def days_between(start: date, end: date) -> list[date]:
+    return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+class Analyzer:
+    def __init__(self, snapshot: Snapshot, cfg: Settings = settings) -> None:
+        self.snap = snapshot
+        self.cfg = cfg
+        self._cache: dict[Hashable, Any] = {}
+        self._lock = Lock()
+        self.regular_run_times = self._regular_run_times()
+
+    # ------------------------------------------------------------------ helpers
+    def _memo(self, key: Hashable, fn: Callable[[], T]) -> T:
+        with self._lock:
+            if key in self._cache:
+                return cast(T, self._cache[key])
+        value = fn()
+        with self._lock:
+            self._cache[key] = value
+        return value
+
+    def _regular_run_times(self) -> list[str]:
+        """Times of day at which WINDFOR runs are normally published (seen on >= 50 % of days)."""
+        pubs = pd.Series(self.snap.forecasts["publish_time"].unique())
+        if pubs.empty:
+            return []
+        tod = pubs.dt.strftime("%H:%M")
+        n_days = pubs.dt.date.nunique()
+        counts = tod.value_counts()
+        return sorted(counts[counts >= 0.5 * n_days].index.tolist())
+
+    def scope_days(self) -> list[date]:
+        return days_between(self.cfg.scope_first_day, self.cfg.scope_last_day)
+
+    def evaluate(self, days: tuple[date, ...], cutoff: time) -> pd.DataFrame:
+        """Hourly grid for ``days`` with the selected forecast, actual, error and wind band."""
+
+        def run() -> pd.DataFrame:
+            selected = select_forecasts(
+                self.snap.forecasts, days, cutoff, self.cfg.lead_days, MARKET_TZ
+            )
+            joined = join_actuals(target_grid(days, "1h", MARKET_TZ), selected, self.snap.actuals)
+            joined["band"] = assign_bands(joined["forecast_mw"])
+            joined["hour"] = joined["start_time"].dt.tz_convert(MARKET_TZ).dt.hour
+            return joined
+
+        return self._memo(("evaluate", days, cutoff), run)
+
+    def _quality(self, joined: pd.DataFrame, days: list[date]) -> dict[str, Any]:
+        """Data-quality checks for an evaluation window, surfaced in the UI (never hidden)."""
+        lo, hi = joined["start_time"].min(), joined["start_time"].max() + pd.Timedelta(hours=1)
+        act = self.snap.actuals
+        hh = act[(act["start_time"] >= lo) & (act["start_time"] < hi)]
+        expected_hh = len(target_grid(days, "30min", MARKET_TZ))
+        missing_fc = joined[joined["forecast_mw"].isna()]["start_time"]
+        missing_act = joined[joined["actual_mw"].isna()]["start_time"]
+        sel = joined.dropna(subset=["publish_time"])
+        stale = sel[sel["age_at_cutoff_h"] > self.cfg.stale_forecast_h]
+        runs_used = sorted(pd.Series(sel["publish_time"].unique()).map(_iso).tolist())
+        fc = self.snap.forecasts
+        window_runs = pd.Series(
+            fc[(fc["publish_time"] >= lo - pd.Timedelta(days=3)) & (fc["publish_time"] < hi)][
+                "publish_time"
+            ].unique()
+        )
+        off = window_runs[~window_runs.dt.strftime("%H:%M").isin(self.regular_run_times)]
+        off_used = [t for t in off.map(_iso) if t in set(runs_used)]
+
+        def check(cid: str, label: str, ok: bool, detail: str, warn: bool = True) -> dict[str, str]:
+            return {
+                "id": cid,
+                "label": label,
+                "status": "ok" if ok else ("warning" if warn else "info"),
+                "detail": detail,
+            }
+
+        checks = [
+            check(
+                "forecast-coverage",
+                "Forecast coverage",
+                missing_fc.empty,
+                f"{len(joined) - len(missing_fc)}/{len(joined)} target hours have a forecast "
+                "published before the cutoff"
+                + (
+                    f"; missing: {', '.join(missing_fc.head(6).map(_iso))}"
+                    + ("…" if len(missing_fc) > 6 else "")
+                    if not missing_fc.empty
+                    else ""
+                ),
+            ),
+            check(
+                "actual-coverage",
+                "Actual generation coverage",
+                missing_act.empty and len(hh) == expected_hh,
+                f"{len(hh)}/{expected_hh} half-hours of FUELHH WIND present; "
+                f"{len(joined) - len(missing_act)}/{len(joined)} hourly targets scoreable",
+            ),
+            check(
+                "freshness",
+                "Forecast freshness at cutoff",
+                stale.empty,
+                f"all selected forecasts were published ≤ {self.cfg.stale_forecast_h:g} h before "
+                "the cutoff"
+                if stale.empty
+                else f"{len(stale)} target hours use a forecast older than "
+                f"{self.cfg.stale_forecast_h:g} h at the cutoff",
+            ),
+            check(
+                "schedule",
+                "Forecast publication schedule",
+                off.empty,
+                "all runs published on the regular schedule "
+                f"({', '.join(self.regular_run_times)} UTC)"
+                if off.empty
+                else f"{len(off)} off-schedule run(s): {', '.join(off.map(_iso))}"
+                + (" (used in this selection)" if off_used else " (not used by this cutoff)"),
+                warn=bool(off_used),
+            ),
+            check(
+                "resolution",
+                "Resolution alignment",
+                False,
+                "Forecasts are hourly, actuals half-hourly: accuracy is scored on the 24 hourly "
+                "timestamps per day (actual for the half-hour starting on the hour).",
+                warn=False,
+            ),
+        ]
+        status = "warning" if any(c["status"] == "warning" for c in checks) else "ok"
+        return {
+            "status": status,
+            "checks": checks,
+            "expected_hours": len(joined),
+            "forecast_hours": len(joined) - len(missing_fc),
+            "actual_hours": len(joined) - len(missing_act),
+            "scored_hours": int(joined["error_mw"].notna().sum()),
+            "runs_used": runs_used,
+        }
+
+    # ------------------------------------------------------------------ View 1
+    def day_forecast(self, day: date, cutoff: time) -> dict[str, Any]:
+        return self._memo(("day", day, cutoff), lambda: self._day_forecast(day, cutoff))
+
+    def _day_forecast(self, day: date, cutoff: time) -> dict[str, Any]:
+        cfg = self.cfg
+        joined = self.evaluate((day,), cutoff).copy()
+        # Planning range from the errors of *other* days at the same cutoff (no look-ahead into D).
+        others = tuple(d for d in self.scope_days() if d != day)
+        hist = self.evaluate(others, cutoff)
+        q = band_quantiles(hist["error_mw"], hist["band"], cfg.band_lower_q, cfg.band_upper_q)
+        lo_q = joined["band"].map(lambda b: q.get(b, q["all"])[0] if b else np.nan)
+        hi_q = joined["band"].map(lambda b: q.get(b, q["all"])[1] if b else np.nan)
+        # actual = forecast - error  ->  actual P10 = forecast - error P90, and vice versa.
+        joined["range_low_mw"] = (joined["forecast_mw"] - hi_q).clip(lower=0)
+        joined["range_high_mw"] = joined["forecast_mw"] - lo_q
+
+        fc = joined.dropna(subset=["forecast_mw"])
+        kpis: dict[str, Any] = {}
+        if not fc.empty:
+            peak = fc.loc[fc["forecast_mw"].idxmax()]
+            low = fc.loc[fc["forecast_mw"].idxmin()]
+            kpis = {
+                "peak_mw": float(peak["forecast_mw"]),
+                "peak_time": _iso(peak["start_time"]),
+                "min_mw": float(low["forecast_mw"]),
+                "min_time": _iso(low["start_time"]),
+                "mean_mw": float(fc["forecast_mw"].mean()),
+                # hourly MW values -> MWh: each value covers one hour
+                "total_mwh": float(fc["forecast_mw"].sum()),
+                "firm_total_mwh": float(fc["range_low_mw"].sum()),
+                "firm_mean_mw": float(fc["range_low_mw"].mean()),
+                "hours": len(fc),
+            }
+
+        runs = (
+            fc.groupby("publish_time")
+            .agg(hours=("start_time", "size"), age=("age_at_cutoff_h", "first"))
+            .reset_index()
+        )
+        cutoff_ts = fc["cutoff"].iloc[0] if not fc.empty else None
+
+        act = self.snap.actuals
+        lo_t, hi_t = joined["start_time"].min(), joined["start_time"].max() + pd.Timedelta(hours=1)
+        hh = act[(act["start_time"] >= lo_t) & (act["start_time"] < hi_t)]
+
+        scored = joined.dropna(subset=["forecast_mw", "actual_mw"])
+        outcome = None
+        if not scored.empty:
+            s = error_summary(scored["forecast_mw"], scored["actual_mw"], cfg.mape_min_actual_mw)
+            inside = (scored["actual_mw"] >= scored["range_low_mw"]) & (
+                scored["actual_mw"] <= scored["range_high_mw"]
+            )
+            outcome = {
+                "mae_mw": s["mae_mw"],
+                "bias_mw": s["bias_mw"],
+                "actual_total_mwh": float(hh["generation_mw"].sum() / 2),  # half-hours -> MWh
+                "forecast_total_mwh": kpis.get("total_mwh"),
+                "within_range_share": float(inside.mean()),
+                "scored_hours": len(scored),
+            }
+
+        return {
+            "delivery_day": day.isoformat(),
+            "cutoff": self._cutoff_info(cutoff, cutoff_ts),
+            "runs_used": [
+                {
+                    "publish_time": _iso(r.publish_time),
+                    "hours": int(r.hours),
+                    "age_at_cutoff_h": float(r.age),
+                }
+                for r in runs.itertuples()
+            ],
+            "points": [
+                {
+                    "start_time": _iso(r.start_time),
+                    "forecast_mw": _num(r.forecast_mw),
+                    "range_low_mw": _num(r.range_low_mw),
+                    "range_high_mw": _num(r.range_high_mw),
+                    "actual_mw": _num(r.actual_mw),
+                    "publish_time": _iso(r.publish_time) if pd.notna(r.publish_time) else None,
+                    "horizon_h": _num(r.horizon_h),
+                    "band": r.band if isinstance(r.band, str) else None,
+                }
+                for r in joined.itertuples()
+            ],
+            "actuals_halfhourly": [
+                {"start_time": _iso(r.start_time), "actual_mw": float(r.generation_mw)}
+                for r in hh.itertuples()
+            ],
+            "kpis": kpis,
+            "planning_range": {
+                "lower_q": cfg.band_lower_q,
+                "upper_q": cfg.band_upper_q,
+                "method": "Empirical quantiles of forecast error at this cutoff, by forecast wind "
+                "band, from the other delivery days in the pilot (the selected day is excluded).",
+                "bands": [
+                    {
+                        "band": b.id,
+                        "label": b.label,
+                        "error_low_mw": q[b.id][0],
+                        "error_high_mw": q[b.id][1],
+                        "n": q[b.id][2],
+                    }
+                    for b in WIND_BANDS
+                ],
+            },
+            "outcome": outcome,
+            "data_quality": self._quality(joined, [day]),
+        }
+
+    def _cutoff_info(self, cutoff: time, cutoff_ts: pd.Timestamp | None) -> dict[str, Any]:
+        label = fmt_cutoff(cutoff)
+        preset = next((p for p in CUTOFF_PRESETS if p.time == label), None)
+        return {
+            "time": label,
+            "timezone": MARKET_TZ,
+            "lead_days": self.cfg.lead_days,
+            "utc": _iso(cutoff_ts) if cutoff_ts is not None else None,
+            "preset_id": preset.id if preset else None,
+            "preset_label": preset.label if preset else "Custom cutoff",
+        }
+
+    # ------------------------------------------------------------------ View 2
+    def accuracy(self, start: date, end: date, cutoff: time) -> dict[str, Any]:
+        return self._memo(("acc", start, end, cutoff), lambda: self._accuracy(start, end, cutoff))
+
+    def _accuracy(self, start: date, end: date, cutoff: time) -> dict[str, Any]:
+        cfg = self.cfg
+        days = days_between(start, end)
+        joined = self.evaluate(tuple(days), cutoff)
+        scored = joined.dropna(subset=["forecast_mw", "actual_mw"]).copy()
+        summary = error_summary(scored["forecast_mw"], scored["actual_mw"], cfg.mape_min_actual_mw)
+
+        by_hour = group_summary(scored, "hour")
+        by_band = group_summary(scored, "band")
+        order = {b.id: i for i, b in enumerate(WIND_BANDS)}
+        labels = {b.id: b.label for b in WIND_BANDS}
+        by_band = sorted(by_band, key=lambda r: order[r["key"]])
+        for r in by_band:
+            r["label"] = labels[r["key"]]
+        scored["day"] = scored["delivery_day"].map(lambda d: d.isoformat())
+        by_day = group_summary(scored, "day")
+
+        cutoff_label = fmt_cutoff(cutoff)
+        alternatives = []
+        for p in CUTOFF_PRESETS:
+            if p.time <= cutoff_label:
+                continue
+            alt = self.evaluate(tuple(days), parse_cutoff(p.time)).dropna(
+                subset=["forecast_mw", "actual_mw"]
+            )
+            alt_mae = float((alt["forecast_mw"] - alt["actual_mw"]).abs().mean())
+            alternatives.append({"label": p.label, "time": p.time, "mae_mw": alt_mae})
+        insights = build_insights(summary, cutoff_label, by_band, by_hour, alternatives)
+
+        sel = joined.dropna(subset=["forecast_mw"])
+        return {
+            "range": {"start": start.isoformat(), "end": end.isoformat(), "days": len(days)},
+            "cutoff": self._cutoff_info(cutoff, sel["cutoff"].iloc[0] if not sel.empty else None),
+            "summary": summary,
+            "horizon_range_h": [float(sel["horizon_h"].min()), float(sel["horizon_h"].max())]
+            if not sel.empty
+            else None,
+            "series": [
+                {
+                    "start_time": _iso(r.start_time),
+                    "forecast_mw": _num(r.forecast_mw),
+                    "actual_mw": _num(r.actual_mw),
+                    "error_mw": _num(r.error_mw),
+                }
+                for r in joined.itertuples()
+            ],
+            "histogram": histogram(scored["error_mw"], cfg.histogram_bin_mw),
+            "by_hour": by_hour,
+            "by_band": by_band,
+            "by_day": by_day,
+            "insights": insights,
+            "data_quality": self._quality(joined, days),
+        }
+
+    # ------------------------------------------------------------- horizon / cutoffs
+    def horizon(self, start: date, end: date) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            days = days_between(start, end)
+            versions = all_versions_with_actuals(
+                self.snap.forecasts, self.snap.actuals, days, MARKET_TZ
+            )
+            return {
+                "range": {"start": start.isoformat(), "end": end.isoformat(), "days": len(days)},
+                "bucket_h": self.cfg.horizon_bucket_h,
+                "buckets": horizon_buckets(versions, self.cfg.horizon_bucket_h),
+                "versions_scored": len(versions),
+            }
+
+        return self._memo(("horizon", start, end), run)
+
+    def cutoff_sweep(self, start: date, end: date, step_min: int = 30) -> dict[str, Any]:
+        def run() -> dict[str, Any]:
+            days = tuple(days_between(start, end))
+            times = {time(h, m) for h in range(24) for m in range(0, 60, step_min)}
+            times |= {parse_cutoff(p.time) for p in CUTOFF_PRESETS}
+            points = []
+            for t in sorted(times):
+                j = self.evaluate(days, t)
+                sc = j.dropna(subset=["forecast_mw", "actual_mw"])
+                s = error_summary(sc["forecast_mw"], sc["actual_mw"], self.cfg.mape_min_actual_mw)
+                pub = sc["publish_time"].dt.strftime("%H:%M")
+                points.append(
+                    {
+                        "time": fmt_cutoff(t),
+                        "n": s["n"],
+                        "mae_mw": s.get("mae_mw"),
+                        "rmse_mw": s.get("rmse_mw"),
+                        "bias_mw": s.get("bias_mw"),
+                        "buffer_p90_mw": s.get("buffer_p90_mw"),
+                        "run_time": pub.mode().iloc[0] if not pub.empty else None,
+                        "mean_horizon_h": float(sc["horizon_h"].mean()) if s["n"] else None,
+                    }
+                )
+            by_time = {p["time"]: p for p in points}
+            presets = [{"id": p.id, "label": p.label, **by_time[p.time]} for p in CUTOFF_PRESETS]
+            return {
+                "range": {"start": start.isoformat(), "end": end.isoformat(), "days": len(days)},
+                "points": points,
+                "presets": presets,
+            }
+
+        return self._memo(("sweep", start, end, step_min), run)
+
+    # ------------------------------------------------------------------ meta
+    def meta(self) -> dict[str, Any]:
+        cfg = self.cfg
+        m = self.snap.manifest
+        return {
+            "scope": {
+                "first_delivery_day": cfg.scope_first_day.isoformat(),
+                "last_delivery_day": cfg.scope_last_day.isoformat(),
+                "first_decision_day": (
+                    cfg.scope_first_day - timedelta(days=cfg.lead_days)
+                ).isoformat(),
+                "last_decision_day": (
+                    cfg.scope_last_day - timedelta(days=cfg.lead_days)
+                ).isoformat(),
+                "description": "Purchase decisions made in January 2026 (cutoff on D-1), i.e. "
+                "delivery days 2 Jan – 1 Feb 2026.",
+            },
+            "timezone": MARKET_TZ,
+            "timezone_note": "All data is stored in UTC. Cutoffs are UK local time; January is GMT, "
+            "so UK time equals UTC throughout the pilot.",
+            "default_cutoff": fmt_cutoff(cfg.default_cutoff),
+            "presets": [
+                {"id": p.id, "label": p.label, "time": p.time, "description": p.description}
+                for p in CUTOFF_PRESETS
+            ],
+            "bands": [
+                {"id": b.id, "label": b.label, "min_mw": b.min_mw, "max_mw": b.max_mw}
+                for b in WIND_BANDS
+            ],
+            "sign_convention": "error = forecast − actual. Positive = forecast too high = wind "
+            "shortfall (buyer short).",
+            "regular_run_times_utc": self.regular_run_times,
+            "snapshot": {
+                "source": m.get("source"),
+                "fetched_at": m.get("fetched_at"),
+                "forecast_rows": m.get("windfor", {}).get("clean_rows"),
+                "forecast_runs": m.get("windfor", {}).get("runs"),
+                "actual_rows": m.get("fuelhh", {}).get("clean_rows"),
+            },
+        }
+
+
+@lru_cache(maxsize=1)
+def get_analyzer() -> Analyzer:
+    return Analyzer(get_snapshot())
