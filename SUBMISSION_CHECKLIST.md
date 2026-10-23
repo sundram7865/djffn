@@ -3,8 +3,7 @@
 ## Repository
 - [ ] Repo is **public** on GitHub with an anonymous random-string name (`djffn`).
 - [ ] No personal names or emails in the code or docs (`git grep -i "<your name>"` returns nothing).
-      Note: the very first commit (the README stub created on GitHub) carries the account's name/email;
-      all later commits use the anonymous identity `djffn <djffn-dev@example.com>`.
+      Commits are authored under your own GitHub identity; only the repository name needs to be anonymous.
 - [ ] Opens in an **incognito** window without signing in.
 - [ ] README contains:
   - [x] directory and file listing with a one-line description each
