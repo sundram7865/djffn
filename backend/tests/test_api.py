@@ -130,6 +130,24 @@ def test_day_forecast(client: TestClient) -> None:
     assert body["outcome"]["scored_hours"] == 24
 
 
+def test_run_timeline_marks_what_was_visible(client: TestClient) -> None:
+    body = client.get("/api/forecast", params={"date": "2026-01-15"}).json()
+    status = {r["publish_time"][11:16]: r["status"] for r in body["run_timeline"]}
+    assert status == {
+        "02:30": "superseded",
+        "04:30": "superseded",
+        "07:30": "used",
+        "09:30": "after_cutoff",
+        "11:30": "after_cutoff",
+        "15:30": "after_cutoff",
+        "18:30": "after_cutoff",
+        "22:30": "after_cutoff",
+    }
+    assert all(r["hours"] == 24 and len(r["values"]) == 24 for r in body["run_timeline"])
+    used = next(r for r in body["run_timeline"] if r["status"] == "used")
+    assert used["mae_mw"] == pytest.approx(body["outcome"]["mae_mw"])
+
+
 def test_cutoff_at_publish_time_uses_that_run(client: TestClient) -> None:
     body = client.get("/api/forecast", params={"date": "2026-01-15", "cutoff": "15:30"}).json()
     assert body["runs_used"][0]["publish_time"] == "2026-01-14T15:30:00Z"

@@ -27,6 +27,8 @@ from app.core.metrics import (
 )
 from app.core.selection import (
     all_versions_with_actuals,
+    cutoff_utc,
+    delivery_day_bounds,
     join_actuals,
     parse_cutoff,
     select_forecasts,
@@ -251,9 +253,11 @@ class Analyzer:
                 "scored_hours": len(scored),
             }
 
+        used = set(runs["publish_time"])
         return {
             "delivery_day": day.isoformat(),
             "cutoff": self._cutoff_info(cutoff, cutoff_ts),
+            "run_timeline": self._run_timeline(day, cutoff, used),
             "runs_used": [
                 {
                     "publish_time": _iso(r.publish_time),
@@ -299,6 +303,43 @@ class Analyzer:
             "outcome": outcome,
             "data_quality": self._quality(joined, [day]),
         }
+
+    def _run_timeline(
+        self, day: date, cutoff: time, used: set[pd.Timestamp]
+    ) -> list[dict[str, Any]]:
+        """Every run published on the decision day (plus any run actually used), with its
+        forecast for ``day`` and whether the buyer could have seen it at the cutoff."""
+        cut = cutoff_utc(day, cutoff, self.cfg.lead_days, MARKET_TZ)
+        pub_lo, pub_hi = delivery_day_bounds(day - timedelta(days=self.cfg.lead_days), MARKET_TZ)
+        d_lo, d_hi = delivery_day_bounds(day, MARKET_TZ)
+        fc = self.snap.forecasts
+        runs = fc[
+            (
+                ((fc["publish_time"] >= pub_lo) & (fc["publish_time"] < pub_hi))
+                | fc["publish_time"].isin(used)
+            )
+            & (fc["start_time"] >= d_lo)
+            & (fc["start_time"] < d_hi)
+        ]
+        act = self.snap.actuals[["start_time", "generation_mw"]]
+        out = []
+        for pub, g in runs.groupby("publish_time", sort=True):
+            status = "used" if pub in used else ("superseded" if pub <= cut else "after_cutoff")
+            scored = g.merge(act, on="start_time", how="inner")
+            mae = (scored["generation_mw_x"] - scored["generation_mw_y"]).abs().mean()
+            out.append(
+                {
+                    "publish_time": _iso(pub),
+                    "status": status,
+                    "hours": len(g),
+                    "mae_mw": _num(mae) if not scored.empty else None,
+                    "values": [
+                        {"start_time": _iso(r.start_time), "forecast_mw": float(r.generation_mw)}
+                        for r in g.sort_values("start_time").itertuples()
+                    ],
+                }
+            )
+        return out
 
     def _cutoff_info(self, cutoff: time, cutoff_ts: pd.Timestamp | None) -> dict[str, Any]:
         label = fmt_cutoff(cutoff)

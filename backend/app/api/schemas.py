@@ -90,9 +90,23 @@ class DayOutcome(BaseModel):
     scored_hours: int
 
 
+class RunValue(BaseModel):
+    start_time: str
+    forecast_mw: float
+
+
+class RunVersion(BaseModel):
+    publish_time: str
+    status: str = Field(description="used | superseded (seen but older) | after_cutoff (not seen)")
+    hours: int
+    mae_mw: float | None = Field(description="MAE of this run against actuals for the day")
+    values: list[RunValue]
+
+
 class DayForecastResponse(BaseModel):
     delivery_day: str
     cutoff: CutoffInfo
+    run_timeline: list[RunVersion]
     runs_used: list[RunUsed]
     points: list[DayPoint]
     actuals_halfhourly: list[HalfHourActual]
