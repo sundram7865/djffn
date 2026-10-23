@@ -32,7 +32,7 @@ RUN useradd --create-home --uid 10001 appuser
 USER appuser
 
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:' + __import__('os').getenv('PORT', '8000') + '/api/health', timeout=4)"
 
 # $PORT is set by Heroku; defaults to 8000 locally.
