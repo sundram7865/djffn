@@ -11,7 +11,7 @@ import {
   YAxis,
 } from "recharts";
 
-import type { DayForecast } from "../../api/types";
+import type { DayForecast, DayPoint } from "../../api/types";
 import { niceScale } from "../../lib/axis";
 import { fmtMW, fmtTime } from "../../lib/format";
 import { useTheme } from "../../lib/theme";
@@ -20,53 +20,53 @@ import type { TipRow } from "./common";
 
 interface Row {
   t: number;
-  forecast?: number | null;
-  range?: [number, number] | null;
-  actual?: number | null;
+  /** Values as drawn: each hourly block plus a closing point so step lines span the full block. */
+  fLine: number | null;
+  rLine: [number, number] | null;
+  aLine: number | null;
 }
 
 const HOUR = 3_600_000;
+const HALF = HOUR / 2;
+
+const rangeOf = (p?: DayPoint): [number, number] | null =>
+  p && p.range_low_mw !== null && p.range_high_mw !== null
+    ? [p.range_low_mw, p.range_high_mw]
+    : null;
 
 /** Hourly forecast with its planning range (step = hourly block), optional half-hourly actuals. */
 export function DayForecastChart({ data, showActual }: { data: DayForecast; showActual: boolean }) {
   const { colors } = useTheme();
 
-  const rows = useMemo(() => {
-    const byT = new Map<number, Row>();
-    const row = (t: number) => {
-      if (!byT.has(t)) byT.set(t, { t });
-      return byT.get(t)!;
-    };
-    for (const p of data.points) {
-      const r = row(Date.parse(p.start_time));
-      r.forecast = p.forecast_mw;
-      r.range =
-        p.range_low_mw !== null && p.range_high_mw !== null
-          ? [p.range_low_mw, p.range_high_mw]
-          : null;
+  const { rows, fc, act } = useMemo(() => {
+    const fc = new Map(data.points.map((p) => [Date.parse(p.start_time), p]));
+    const act = new Map(
+      data.actuals_halfhourly.map((a) => [Date.parse(a.start_time), a.actual_mw]),
+    );
+    const first = data.points.length ? Date.parse(data.points[0].start_time) : 0;
+    const last = first + data.points.length * HOUR;
+    const rows: Row[] = [];
+    for (let t = first; t <= last; t += HALF) {
+      const hourT = t - (t % HOUR);
+      const own = fc.get(hourT);
+      // On the hour, close the previous block if this hour has no forecast (gap or end of day).
+      const prev = t === hourT ? fc.get(t - HOUR) : undefined;
+      const src = own?.forecast_mw != null ? own : prev?.forecast_mw != null ? prev : undefined;
+      rows.push({
+        t,
+        fLine: src?.forecast_mw ?? null,
+        rLine: rangeOf(src),
+        aLine: act.get(t) ?? act.get(t - HALF) ?? null,
+      });
     }
-    for (const a of data.actuals_halfhourly) row(Date.parse(a.start_time)).actual = a.actual_mw;
-    // Repeat the last block's values at the end of the day so step lines cover the final hour/half-hour.
-    const last = data.points[data.points.length - 1];
-    if (last) {
-      const end = Date.parse(last.start_time) + HOUR;
-      const r = row(end);
-      r.forecast = last.forecast_mw;
-      r.range =
-        last.range_low_mw !== null && last.range_high_mw !== null
-          ? [last.range_low_mw, last.range_high_mw]
-          : null;
-      const lastAct = data.actuals_halfhourly[data.actuals_halfhourly.length - 1];
-      if (lastAct) r.actual = lastAct.actual_mw;
-    }
-    return [...byT.values()].sort((a, b) => a.t - b.t);
+    return { rows, fc, act };
   }, [data]);
 
   const start = rows[0]?.t ?? 0;
   const ticks = Array.from({ length: 9 }, (_, i) => start + i * 3 * HOUR);
   const kpis = "peak_mw" in data.kpis ? data.kpis : null;
   const scale = niceScale(
-    rows.flatMap((r) => [r.forecast, r.range?.[1], showActual ? r.actual : null]),
+    rows.flatMap((r) => [r.fLine, r.rLine?.[1], showActual ? r.aLine : null]),
   );
 
   return (
@@ -97,30 +97,29 @@ export function DayForecastChart({ data, showActual }: { data: DayForecast; show
               content={({ active, label }) => {
                 if (!active || label === undefined) return null;
                 const t = Number(label);
-                const hourT = t - (t % HOUR);
-                const h = rows.find((r) => r.t === hourT);
-                const a = rows.find((r) => r.t === t);
+                const h = fc.get(t - (t % HOUR));
+                const range = rangeOf(h);
+                const a = act.get(t);
                 const tipRows: TipRow[] = [];
-                if (h?.forecast != null)
-                  tipRows.push({
-                    key: "f",
-                    label: "forecast",
-                    value: fmtMW(h.forecast),
-                    color: colors.forecast,
-                  });
-                if (h?.range)
+                tipRows.push({
+                  key: "f",
+                  label: h?.forecast_mw != null ? "forecast" : "no forecast before the cutoff",
+                  value: h?.forecast_mw != null ? fmtMW(h.forecast_mw) : "–",
+                  color: colors.forecast,
+                });
+                if (range)
                   tipRows.push({
                     key: "r",
                     label: "planning range",
-                    value: `${fmtMW(h.range[0])} – ${fmtMW(h.range[1])}`,
+                    value: `${fmtMW(range[0])} – ${fmtMW(range[1])}`,
                     color: colors.forecast,
                     shape: "band",
                   });
-                if (showActual && a?.actual != null)
+                if (showActual && a !== undefined)
                   tipRows.push({
                     key: "a",
                     label: "actual",
-                    value: fmtMW(a.actual),
+                    value: fmtMW(a),
                     color: colors.actual,
                   });
                 const iso = new Date(t).toISOString();
@@ -128,34 +127,31 @@ export function DayForecastChart({ data, showActual }: { data: DayForecast; show
               }}
             />
             <Area
-              dataKey="range"
+              dataKey="rLine"
               type="stepAfter"
               stroke="none"
               fill={colors.forecast}
               fillOpacity={0.13}
               isAnimationActive={false}
-              connectNulls
             />
             <Line
-              dataKey="forecast"
+              dataKey="fLine"
               type="stepAfter"
               stroke={colors.forecast}
               strokeWidth={2}
               dot={false}
               activeDot={false}
               isAnimationActive={false}
-              connectNulls
             />
             {showActual && (
               <Line
-                dataKey="actual"
+                dataKey="aLine"
                 type="stepAfter"
                 stroke={colors.actual}
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4, stroke: colors.surface, strokeWidth: 2 }}
                 isAnimationActive={false}
-                connectNulls
               />
             )}
             {kpis && (

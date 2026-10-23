@@ -13,6 +13,7 @@ import { ForecastView } from "./views/ForecastView";
 type View = "forecast" | "accuracy";
 
 const DEFAULT_DAY = "2026-01-15";
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export default function App() {
   const meta = useMeta();
@@ -32,8 +33,8 @@ export default function App() {
   const max = m?.scope.last_delivery_day ?? "2026-02-01";
   const clamp = (d: string | undefined, fallback: string) =>
     d && d >= min && d <= max ? d : fallback;
-  const cutoff =
-    url.cutoff && /^\d{2}:\d{2}$/.test(url.cutoff) ? url.cutoff : (m?.default_cutoff ?? "09:20");
+  // Malformed or out-of-range values in a shared link fall back to defaults instead of erroring.
+  const cutoff = url.cutoff && HHMM.test(url.cutoff) ? url.cutoff : (m?.default_cutoff ?? "09:20");
   const day = clamp(url.day, DEFAULT_DAY);
   const start = clamp(url.start, min);
   const end = clamp(url.end, max) < start ? max : clamp(url.end, max);
