@@ -44,7 +44,10 @@ memory. Numbers marked *(snapshot)* are reproduced by `backend/scripts/profile_s
   Negative-horizon values are ignored for decision analysis.
 - Irregularity found: on **15 Jan 2026 the 11:30 run was published at 12:25** (55 min late). It does not affect the
   default cutoff but is surfaced as a data-quality note.
-- No duplicate `(publishTime, startTime)` pairs; no null generation values; min 2,051 MW, max 21,353 MW.
+- No duplicate `(publishTime, startTime)` pairs; no null generation values; snapshot range 2,250–21,353 MW
+  *(snapshot)*.
+- Runs genuinely update: for overlapping targets, a run differs from the previous run by **273 MW on average**
+  *(snapshot)*; only ~0–6 % of runs are exact republications of the previous values.
 
 ### What this means for the decision
 For a cutoff on D-1, the forecast run selected is:
@@ -83,14 +86,19 @@ Data fetched accordingly:
   Runs on 1 Feb are used *only* in the forecast-age analysis (short horizons for 1 Feb targets), never for a decision.
 - FUELHH settlement dates 1 Jan – 1 Feb 2026.
 
-## 7. First-look findings (default cutoff, 744 scored hours)
+## 7. Findings (default 09:20 cutoff, 31 delivery days, 744 scored hours) *(snapshot)*
 
 | Metric | Value |
 |---|---|
-| MAE | ≈ 2.0 GW |
-| Bias (forecast − actual) | ≈ +1.75 GW — forecast too high in ~85 % of hours |
-| Bias by forecast level | < 8 GW: +0.3 GW · 8–14 GW: +1.5 GW · ≥ 14 GW: +2.5 GW |
-| Later cutoffs | 09:50 → MAE ≈ 2.0 GW, 15:30 → ≈ 1.86 GW, end of D-1 → ≈ 1.81 GW |
+| MAE / RMSE | 2,022 MW / 2,497 MW (WAPE 17.9 % of wind energy) |
+| Bias (forecast − actual) | **+1,746 MW** — forecast too high in **85 %** of hours |
+| 9-in-10 shortfall buffer (P90 of error) | 4,154 MW; 1-in-20 (P95) 5,268 MW; worst hour 6,894 MW |
+| Bias by forecast level | < 8 GW: +325 MW · 8–14 GW: +1,527 MW · ≥ 14 GW: +2,513 MW |
+| 9-in-10 buffer by level | < 8 GW: 1,887 MW · 8–14 GW: 3,638 MW · ≥ 14 GW: 4,660 MW |
+| Later cutoffs | 09:50 → MAE 1,996 MW (−1.3 %) · 15:30 → 1,859 MW (−8.1 %) · 23:30 → 1,807 MW |
+| Forecast age | MAE 1,654 MW at 0–6 h → 2,151 MW at 36–42 h → 2,319 MW at 42–48 h |
+| Worst / best days | 28 Jan MAE 5,329 MW · 12 Jan 4,875 MW · 19 Jan 684 MW (the only clearly under-forecast day) |
+| Early-cutoff gap | Cutoffs before 02:30 on D-1 leave 22:00–23:00 of D uncovered (682 of 744 hours) |
 
 - The over-forecast grows with wind level. Plausible causes include **curtailment / constraint actions** (metered
   output is post-curtailment) and **coverage differences** between the two datasets. Elexon WIND data alone cannot
