@@ -1,0 +1,5 @@
+# Alternative deployment: Heroku container stack (heroku stack:set container).
+# Heroku builds the same Dockerfile used locally and injects $PORT.
+build:
+  docker:
+    web: Dockerfile

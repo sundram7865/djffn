@@ -156,8 +156,8 @@ function Hero({ data, day, dimmed }: { data?: DayForecast; day: string; dimmed: 
                 {fmtDayShort(run.publish_time)}, {fmtTime(run.publish_time)} UK
               </div>
               <p className="mt-1">
-                {fmtHours(run.age_at_cutoff_h)} before the {data.cutoff.time} gate on D-1 (
-                {data.cutoff.preset_label}).
+                {fmtHours(run.age_at_cutoff_h)} before the {data.cutoff.time} gate on D-1 ·{" "}
+                {data.cutoff.preset_label}.
                 {data.runs_used.length > 1 &&
                   ` ${data.runs_used.length} runs combined to fill gaps.`}
               </p>
