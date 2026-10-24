@@ -50,3 +50,13 @@ def test_fuelhh_keeps_latest_revision_and_counts_gaps() -> None:
     assert stats["duplicate_rows_dropped"] == 1
     assert stats["other_fuel_rows_ignored"] == 1
     assert stats["missing_halfhours"] == 2  # 00:30 and 01:00
+
+
+def test_windfor_drops_backcasts() -> None:
+    raw = [
+        wf("2026-01-14T07:30:00Z", "2026-01-14T07:00:00Z"),  # hour already started
+        wf("2026-01-14T07:30:00Z", "2026-01-14T08:00:00Z"),  # a real forecast
+    ]
+    df, stats = clean_windfor(raw)
+    assert stats["backcast_rows_dropped"] == 1
+    assert (df["start_time"] > df["publish_time"]).all() and len(df) == 1

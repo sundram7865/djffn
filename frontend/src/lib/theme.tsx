@@ -21,6 +21,8 @@ const palettes = {
     ink: "#0b0b0b",
     surface: "#fcfcfb",
     later: "#c9c8c1",
+    neutral: "#6f6e68",
+    third: "#1baf7a",
     seq: ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"],
   },
   dark: {
@@ -35,6 +37,8 @@ const palettes = {
     ink: "#f0efec",
     surface: "#1a1a19",
     later: "#4a4a46",
+    neutral: "#a3a29b",
+    third: "#199e70",
     seq: ["#14304f", "#184f95", "#1c5cab", "#2a78d6", "#5598e7", "#86b6ef", "#b7d3f6"],
   },
 } as const;

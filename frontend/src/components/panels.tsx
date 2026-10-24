@@ -72,7 +72,7 @@ export function DataQualityPanel({ dq, compact }: { dq: DataQuality; compact?: b
             </span>
             <span>
               <span className="font-medium text-ink">{c.label}</span>
-              <span className="text-ink-2"> — {c.detail}</span>
+              <span className="text-ink-2">: {c.detail}</span>
             </span>
           </li>
         ))}
@@ -133,7 +133,7 @@ export function MethodologyDrawer({
             <ul className="list-disc pl-5">
               {meta.presets.map((p) => (
                 <li key={p.id}>
-                  <b className="text-ink">{p.time}</b> — {p.label}. {p.description}
+                  <b className="text-ink">{p.time}</b>: {p.label}. {p.description}
                 </li>
               ))}
             </ul>

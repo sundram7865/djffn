@@ -1,4 +1,4 @@
-# Plan — UK Wind Forecast Decision Tool (pilot)
+# Plan: UK Wind Forecast Decision Tool (pilot)
 
 ## 1. Problem in one paragraph
 
@@ -9,18 +9,18 @@ Whatever wind does not deliver has to be bought elsewhere. The team therefore ne
    moment the decision had to be made (never a later revision).
 2. **How wrong could it be?** A quantified error profile of those forecasts so they can carry a buffer.
 
-Data: Elexon BMRS only — `FUELHH` (actual, `fuelType=WIND`) and `WINDFOR` (forecast, many versions per target).
+Data: Elexon BMRS only: `FUELHH` (actual, `fuelType=WIND`) and `WINDFOR` (forecast, many versions per target).
 Scope: purchase decisions made in **January 2026**.
 
 ## 2. Key assumptions (all configurable / documented)
 
 | Topic | Decision | Why |
 |---|---|---|
-| Decision cutoff | **09:20 UK local time on D-1** by default (EPEX SPOT GB 60-min day-ahead auction gate closure). Presets: 09:50 (Nord Pool N2EX GB day-ahead), 15:30 (EPEX GB 30-min auction). Any HH:MM is accepted by API and UI. | Earliest of the two main GB hourly day-ahead auctions — a team bidding in either must have its view by then. Conservative: never uses information that would not have been available. |
+| Decision cutoff | **09:20 UK local time on D-1** by default (EPEX SPOT GB 60-min day-ahead auction gate closure). Presets: 09:50 (Nord Pool N2EX GB day-ahead), 15:30 (EPEX GB 30-min auction). Any HH:MM is accepted by API and UI. | Earliest of the two main GB hourly day-ahead auctions; a team bidding in either must have its view by then. Conservative: never uses information that would not have been available. |
 | Selection rule | For each target time in D: the forecast with the **max `publishTime` such that `publishTime <= cutoff`**. | Exactly what a trader could have seen. Published *at* the cutoff counts as available. |
 | Delivery day | GB settlement day, 00:00–24:00 **Europe/London** local time. | Matches Elexon settlement periods 1–48. |
 | Time zones | All storage and computation in **UTC**; cutoff is defined in Europe/London and converted with `zoneinfo`. January is GMT, so local = UTC, but the code is DST-safe. | Avoids silent off-by-one-hour bugs. |
-| Scope | Decisions (cutoffs) in January 2026 → delivery days **2 Jan – 1 Feb 2026** (31 days). | "Decisions made in January" — the 31 Jan decision delivers on 1 Feb; 1 Jan delivery was decided in December. |
+| Scope | Decisions (cutoffs) in January 2026 → delivery days **2 Jan – 1 Feb 2026** (31 days). | "Decisions made in January": the 31 Jan decision delivers on 1 Feb; 1 Jan delivery was decided in December. |
 | Resolution | WINDFOR is **hourly**, FUELHH is **half-hourly**. Score on the 24 hourly timestamps where both exist (join on `startTime`, as the brief specifies). The `:30` actuals are displayed but not scored. | No invented forecast values. Sensitivity check vs. hourly-mean actual is documented (<1% MAE difference). Also matches hourly day-ahead auction products. |
 | Error sign | `error = forecast − actual`. Positive = forecast too high = **wind shortfall** → buyer is short. | Shortfall is the expensive side for a buyer, so it is reported separately. |
 | Data access | Snapshot ingested once from Elexon, validated, committed as CSV + manifest. Deployed app never calls Elexon. | January 2026 is historical; makes the app fast, deterministic and demo-proof. |
@@ -43,7 +43,7 @@ Elexon API ──(scripts/ingest.py, once)──► backend/data/*.csv + manifes
 - **Docker**: one multi-stage image (node build → python runtime that serves API + static SPA); `docker compose up`.
 - **Deployment**: Vercel (free tier). Static Vite build + one Python function (`api/index.py`) that mounts the same
   FastAPI app; rewrites `/api/*` to it. `heroku.yml` provided as a container-based alternative.
-- **CI**: GitHub Actions — ruff (lint + format check), pytest, eslint, prettier check, tsc, vitest, build.
+- **CI**: GitHub Actions: ruff (lint + format check), pytest, eslint, prettier check, tsc, vitest, build.
 
 ## 4. Data model
 
@@ -57,8 +57,8 @@ Elexon API ──(scripts/ingest.py, once)──► backend/data/*.csv + manifes
 |---|---|
 | `GET /api/health` | liveness |
 | `GET /api/meta` | scope, default cutoff, presets, bands, sign convention, data-quality summary |
-| `GET /api/forecast?date&cutoff` | View 1 — selected forecast for one delivery day, KPIs, planning band, actuals (reveal), DQ |
-| `GET /api/accuracy?start&end&cutoff` | View 2 — joined series, KPIs, percentiles, histogram, by hour/level/day, insight, DQ |
+| `GET /api/forecast?date&cutoff` | View 1: selected forecast for one delivery day, KPIs, planning band, actuals (reveal), DQ |
+| `GET /api/accuracy?start&end&cutoff` | View 2: joined series, KPIs, percentiles, histogram, by hour/level/day, insight, DQ |
 | `GET /api/horizon?start&end` | error vs forecast age using **all** forecast versions |
 | `GET /api/cutoffs?start&end` | metric sweep over cutoff times on D-1 (every 30 min) + preset comparison |
 

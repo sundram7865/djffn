@@ -237,7 +237,7 @@ export function ChartOrTable({
   const [view, setView] = useState<"chart" | "table">("chart");
   return (
     <div className="relative">
-      <div className="flex justify-end px-5 pt-2 xl:absolute xl:-top-10 xl:right-5 xl:p-0">
+      <div className="-mt-1 flex justify-end px-5 pt-1">
         <Segmented
           size="sm"
           label="Display as"

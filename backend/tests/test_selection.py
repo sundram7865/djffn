@@ -1,4 +1,4 @@
-"""Point-in-time forecast selection — the most important rule in the product."""
+"""Point-in-time forecast selection: the most important rule in the product."""
 
 from __future__ import annotations
 

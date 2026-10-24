@@ -258,6 +258,7 @@ class Analyzer:
             "delivery_day": day.isoformat(),
             "cutoff": self._cutoff_info(cutoff, cutoff_ts),
             "run_timeline": self._run_timeline(day, cutoff, used),
+            "evolution": self._evolution(day, cutoff, used),
             "runs_used": [
                 {
                     "publish_time": _iso(r.publish_time),
@@ -341,6 +342,53 @@ class Analyzer:
             )
         return out
 
+    def _evolution(self, day: date, cutoff: time, used: set[pd.Timestamp]) -> dict[str, Any]:
+        """How the forecast for ``day`` changed over every run published in the two days before it.
+
+        Runs published on D-2 stop at 21:00 on D, so runs are compared on the hours that *all* of
+        them cover; that keeps the run-to-run comparison like for like.
+        """
+        cut = cutoff_utc(day, cutoff, self.cfg.lead_days, MARKET_TZ)
+        d_lo, d_hi = delivery_day_bounds(day, MARKET_TZ)
+        pub_lo, _ = delivery_day_bounds(day - timedelta(days=2), MARKET_TZ)
+        fc = self.snap.forecasts
+        sub = fc[
+            (fc["publish_time"] >= pub_lo)
+            & (fc["publish_time"] < d_lo)
+            & (fc["start_time"] >= d_lo)
+            & (fc["start_time"] < d_hi)
+        ]
+        empty = {"hours": 0, "first_hour": None, "last_hour": None, "actual_mean_mw": None}
+        if sub.empty:
+            return {**empty, "runs": []}
+        n_runs = sub["publish_time"].nunique()
+        per_hour = sub.groupby("start_time")["publish_time"].nunique()
+        common = per_hour[per_hour == n_runs].index
+        sub = sub[sub["start_time"].isin(common)]
+        actual = self.snap.actuals.set_index("start_time")["generation_mw"]
+        actual_common = actual.reindex(common)
+        runs = []
+        for pub, g in sub.groupby("publish_time", sort=True):
+            err = g["generation_mw"] - g["start_time"].map(actual)
+            status = "used" if pub in used else ("superseded" if pub <= cut else "after_cutoff")
+            runs.append(
+                {
+                    "publish_time": _iso(pub),
+                    "status": status,
+                    "lead_h": float((d_lo - pub) / pd.Timedelta(hours=1)),
+                    "mean_forecast_mw": float(g["generation_mw"].mean()),
+                    "mae_mw": _num(err.abs().mean()) if err.notna().any() else None,
+                    "bias_mw": _num(err.mean()) if err.notna().any() else None,
+                }
+            )
+        return {
+            "hours": len(common),
+            "first_hour": _iso(common.min()),
+            "last_hour": _iso(common.max()),
+            "actual_mean_mw": _num(actual_common.mean()) if actual_common.notna().any() else None,
+            "runs": runs,
+        }
+
     def _cutoff_info(self, cutoff: time, cutoff_ts: pd.Timestamp | None) -> dict[str, Any]:
         label = fmt_cutoff(cutoff)
         preset = next((p for p in CUTOFF_PRESETS if p.time == label), None)
@@ -384,7 +432,11 @@ class Analyzer:
             )
             alt_mae = float((alt["forecast_mw"] - alt["actual_mw"]).abs().mean())
             alternatives.append({"label": p.label, "time": p.time, "mae_mw": alt_mae})
-        insights = build_insights(summary, cutoff_label, by_band, by_hour, alternatives)
+
+        hh, daily, energy = self._energy(joined, days)
+        insights = build_insights(
+            summary, cutoff_label, by_band, by_hour, alternatives=alternatives, energy=energy
+        )
 
         sel = joined.dropna(subset=["forecast_mw"])
         return {
@@ -403,6 +455,12 @@ class Analyzer:
                 }
                 for r in joined.itertuples()
             ],
+            "actuals_halfhourly": [
+                {"start_time": _iso(r.start_time), "actual_mw": float(r.generation_mw)}
+                for r in hh.itertuples()
+            ],
+            "daily_energy": daily,
+            "energy": energy,
             "histogram": histogram(scored["error_mw"], cfg.histogram_bin_mw),
             "by_hour": by_hour,
             "by_band": by_band,
@@ -411,8 +469,60 @@ class Analyzer:
             "data_quality": self._quality(joined, days),
         }
 
+    def _energy(
+        self, joined: pd.DataFrame, days: list[date]
+    ) -> tuple[pd.DataFrame, list[dict[str, Any]], dict[str, Any] | None]:
+        """Half-hourly actuals for the window, and forecast vs actual *energy* per day and overall.
+
+        Energy uses both half-hours of every hour (MWh = mean MW over the hour), so every actual
+        reading counts. Only hours that have both a forecast and both half-hours are compared.
+        """
+        lo, _ = delivery_day_bounds(days[0], MARKET_TZ)
+        _, hi = delivery_day_bounds(days[-1], MARKET_TZ)
+        act = self.snap.actuals
+        hh = act[(act["start_time"] >= lo) & (act["start_time"] < hi)]
+        by_t = hh.set_index("start_time")["generation_mw"]
+        e = joined.dropna(subset=["forecast_mw"]).copy()
+        first = e["start_time"].map(by_t)
+        second = (e["start_time"] + pd.Timedelta(minutes=30)).map(by_t)
+        e["actual_mwh"] = (first + second) / 2
+        e = e.dropna(subset=["actual_mwh"])
+        if e.empty:
+            return hh, [], None
+        g = (
+            e.groupby("delivery_day")
+            .agg(
+                forecast_mwh=("forecast_mw", "sum"),
+                actual_mwh=("actual_mwh", "sum"),
+                hours=("start_time", "size"),
+            )
+            .reset_index()
+        )
+        daily = [
+            {
+                "day": r.delivery_day.isoformat(),
+                "forecast_mwh": float(r.forecast_mwh),
+                "actual_mwh": float(r.actual_mwh),
+                "error_mwh": float(r.forecast_mwh - r.actual_mwh),
+                "hours": int(r.hours),
+            }
+            for r in g.itertuples()
+        ]
+        fc_total, act_total = float(g["forecast_mwh"].sum()), float(g["actual_mwh"].sum())
+        energy = {
+            "forecast_mwh": fc_total,
+            "actual_mwh": act_total,
+            "error_mwh": fc_total - act_total,
+            "error_pct": (fc_total - act_total) / act_total * 100 if act_total else None,
+            "short_days": int((g["forecast_mwh"] > g["actual_mwh"]).sum()),
+            "days": len(g),
+        }
+        return hh, daily, energy
+
     # ------------------------------------------------------------- horizon / cutoffs
-    def horizon(self, start: date, end: date) -> dict[str, Any]:
+    def horizon(self, start: date, end: date, bucket_h: int | None = None) -> dict[str, Any]:
+        size = bucket_h or self.cfg.horizon_bucket_h
+
         def run() -> dict[str, Any]:
             days = days_between(start, end)
             versions = all_versions_with_actuals(
@@ -420,12 +530,13 @@ class Analyzer:
             )
             return {
                 "range": {"start": start.isoformat(), "end": end.isoformat(), "days": len(days)},
-                "bucket_h": self.cfg.horizon_bucket_h,
-                "buckets": horizon_buckets(versions, self.cfg.horizon_bucket_h),
+                "bucket_h": size,
+                "buckets": horizon_buckets(versions, size),
                 "versions_scored": len(versions),
+                "runs": int(versions["publish_time"].nunique()) if len(versions) else 0,
             }
 
-        return self._memo(("horizon", start, end), run)
+        return self._memo(("horizon", start, end, size), run)
 
     def cutoff_sweep(self, start: date, end: date, step_min: int = 30) -> dict[str, Any]:
         def run() -> dict[str, Any]:

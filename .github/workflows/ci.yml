@@ -66,12 +66,18 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
-      - name: Build image
-        run: docker build -t winddesk:ci .
-      - name: Smoke test
+      - name: Start frontend + backend with docker compose
+        run: docker compose up -d --build --wait --wait-timeout 180
+      - name: Smoke test both services
         run: |
-          docker run -d --name app -p 8000:8000 winddesk:ci
-          for i in $(seq 1 30); do curl -fsS localhost:8000/api/health && break; sleep 1; done
-          curl -fsS "localhost:8000/api/forecast?date=2026-01-15" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d['points'])==24"
-          curl -fsS localhost:8000/ | grep -q '<div id="root">'
-          docker logs app
+          curl -fsS localhost:8000/api/health
+          curl -fsS localhost:3000/ | grep -q '<div id="root">'
+          curl -fsS localhost:3000/api/health
+          curl -fsS "localhost:3000/api/forecast?date=2026-01-15" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d['points'])==24"
+          curl -fsS -o /dev/null localhost:3000/some/deep/link
+          docker compose ps
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Build the single-container image (Heroku)
+        run: docker build -t winddesk:single .

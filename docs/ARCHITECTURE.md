@@ -19,7 +19,8 @@ flowchart LR
         AN --> R[api/routes.py<br/>validation · cache headers]
     end
 
-    R -->|JSON /api/*| UI[React SPA<br/>TanStack Query · Recharts]
+    R -->|JSON /api/*| NG[nginx in Docker, or the Vercel CDN<br/>static build + /api routing]
+    NG --> UI[React SPA<br/>TanStack Query · Recharts]
     UI -->|cutoff, day, range<br/>in the URL| R
 ```
 
@@ -100,9 +101,9 @@ target hours.
 |---|---|
 | `GET /api/health` | liveness |
 | `GET /api/meta` | scope, default cutoff, presets, bands, sign convention, run schedule, snapshot info |
-| `GET /api/forecast?date=YYYY-MM-DD&cutoff=HH:MM` | View 1: selected hourly forecast, planning range, KPIs, run timeline, half-hourly actuals, outcome, data quality |
-| `GET /api/accuracy?start&end&cutoff` | View 2: summary, series, histogram, by hour/band/day, insights, data quality |
-| `GET /api/horizon?start&end` | error vs forecast age over all versions |
+| `GET /api/forecast?date=YYYY-MM-DD&cutoff=HH:MM` | View 1: selected hourly forecast, planning range, KPIs, run timeline (D-1 runs), forecast evolution (every D-2 and D-1 run on their common hours), half-hourly actuals, outcome, data quality |
+| `GET /api/accuracy?start&end&cutoff` | View 2: summary, hourly series, every half-hour of actuals, daily and total energy balance, histogram, by hour/band/day, insights, data quality |
+| `GET /api/horizon?start&end&bucket_h` | error vs forecast age over all versions (MAE, P50 and P90 of the miss, bias); bucket width 1 to 12 h |
 | `GET /api/cutoffs?start&end` | metrics for every 30-min cutoff on D-1 plus the gate presets |
 
 Invalid input (date outside scope, malformed cutoff, `start > end`) → `422` with a readable message.
@@ -113,6 +114,9 @@ Invalid input (date outside scope, malformed cutoff, `start > end`) → `422` wi
 - **Filters in one row above everything they scope.** The cutoff applies to both views.
 - **Refetch keeps the frame:** previous data stays on screen at reduced opacity (no skeleton flash);
   skeletons appear only on first load; errors have a retry; empty ranges show an empty state.
+- **Every row is shown:** forecast vs actual is drawn at half-hour resolution (all 1,488 actual readings),
+  an hour-by-day heatmap and a forecast/actual scatter show all 744 scored hours, the daily energy gap
+  uses both half-hours of every hour, and the forecast-age chart scores all 14,383 forecast values.
 - **Charts:** forecast = blue, actual = neutral ink, shortfall = red, surplus = grey. Hourly values are
   drawn as steps (they are hourly averages). One y-axis per chart, a legend for 2+ series, tooltips with
   the value first, and a Chart/Table toggle so no value is reachable only through hover.
@@ -127,14 +131,16 @@ Invalid input (date outside scope, malformed cutoff, `start > end`) → `422` wi
 | Unit | Insight text contains exactly the computed numbers | `tests/test_insights.py` |
 | Unit | Cleaning rules | `tests/test_cleaning.py` |
 | Integration | Data-quality surfacing on a synthetic snapshot | `tests/test_analyzer_quality.py` |
+| Data usage | Every forecast value and every actual half-hour in the snapshot is used; energy cross-checked | `tests/test_data_usage.py` |
+| Copy | No em dashes in any API response or frontend source | `tests/test_api.py`, `src/test/copy.test.ts` |
 | API / E2E-ish | Every endpoint; **independent stdlib re-computation** of headline metrics; validation errors | `tests/test_api.py` |
 | Frontend | Formatters (incl. BST), axis scales, controls, panels | `src/**/*.test.ts(x)` |
-| Deployment | Docker build + HTTP smoke test in CI; `vercel build` verified locally | `.github/workflows/ci.yml` |
+| Deployment | `docker compose up` of both services + smoke test through the nginx proxy in CI; single-container image built; `vercel build` verified locally | `.github/workflows/ci.yml` |
 
 ## 8. Deployment topology
 
 | Target | How it runs |
 |---|---|
-| Docker / Compose | `uvicorn app.main:app`; FastAPI serves `/api/*` and the built SPA (`STATIC_DIR`) on one port |
-| Heroku | Same image via `heroku.yml`; `$PORT` honoured |
+| Docker Compose | Two services. `backend`: uvicorn + FastAPI on 8000 with a healthcheck. `frontend`: nginx on 3000 serving the Vite build and proxying `/api/*` to `backend:8000`; it starts once the backend is healthy |
+| Heroku | Root `Dockerfile` via `heroku.yml`: one container where FastAPI serves `/api/*` and the SPA (`STATIC_DIR`) on `$PORT` |
 | Vercel | Static `frontend/dist` on the CDN; `/api/*` → `api/index.py` (Python 3.12 function bundling `backend/app` + `backend/data`) |

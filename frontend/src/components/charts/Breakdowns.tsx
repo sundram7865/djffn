@@ -1,8 +1,8 @@
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   ComposedChart,
   Line,
   ReferenceArea,
@@ -201,45 +201,60 @@ const barLabel = (fill: string) => ({
   formatter: (v: unknown) => (typeof v === "number" ? (v / 1000).toFixed(1) : ""),
 });
 
-/** Error vs forecast age (all versions). Shades the horizons the chosen cutoff actually uses. */
+/**
+ * Error vs forecast age over every forecast version (3-hour buckets). The line is MAE; the band
+ * runs from the typical miss (P50 of |error|) to a bad miss (P90). Buckets beyond the point where
+ * fewer runs reach are drawn faded: they hold fewer samples from a skewed mix of hours.
+ */
 export function HorizonChart({ data, used }: { data: Horizon; used: [number, number] | null }) {
   const { colors } = useTheme();
-  const rows = data.buckets;
-  const scale = niceScale(rows.flatMap((b) => [b.mae_mw, b.bias_mw]));
-  const usedLabels =
-    used && rows.length
-      ? rows
-          .filter((b) => b.horizon_to_h > used[0] && b.horizon_from_h < used[1])
-          .map((b) => b.label)
-      : [];
+  const rows = data.buckets.map((b, i, all) => {
+    const nextLow = all[i + 1]?.low_coverage ?? false;
+    return {
+      ...b,
+      mid: (b.horizon_from_h + b.horizon_to_h) / 2,
+      band: [b.p50_abs_mw, b.p90_abs_mw] as [number, number],
+      maeFull: b.low_coverage ? null : b.mae_mw,
+      // The last full bucket is repeated in the faded series so the two lines join up.
+      maeLow: b.low_coverage || nextLow ? b.mae_mw : null,
+    };
+  });
+  const scale = niceScale(rows.flatMap((r) => [r.p90_abs_mw, r.bias_mw]));
+  const maxH = rows.length ? rows[rows.length - 1].horizon_to_h : 72;
+  const firstLow = rows.find((r) => r.low_coverage)?.horizon_from_h;
+  const ticks = Array.from({ length: Math.floor(maxH / 12) + 1 }, (_, i) => i * 12);
+
   return (
     <div>
       <Legend
         items={[
-          { label: "MAE by forecast age", color: colors.forecast, shape: "box" },
+          { label: "MAE (typical miss)", color: colors.forecast },
+          { label: "P50 to P90 of the miss", color: colors.forecast, shape: "band" },
           { label: "Bias", color: colors.secondary },
-          ...(usedLabels.length
-            ? [{ label: "Ages used at your cutoff", color: colors.muted, shape: "band" as const }]
+          ...(used
+            ? [{ label: "Ages your cutoff uses", color: colors.muted, shape: "band" as const }]
             : []),
         ]}
       />
-      <div className="h-[260px] px-2 pb-3 pt-2">
+      <div className="h-[280px] px-2 pb-3 pt-2">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={rows} margin={{ top: 24, right: 20, bottom: 18, left: 4 }}>
             <CartesianGrid vertical={false} stroke={colors.grid} />
-            {usedLabels.length > 0 && (
+            {used && (
               <ReferenceArea
-                x1={usedLabels[0]}
-                x2={usedLabels[usedLabels.length - 1]}
+                x1={used[0]}
+                x2={used[1]}
                 fill={colors.muted}
                 fillOpacity={0.12}
+                ifOverflow="extendDomain"
               />
             )}
             <XAxis
-              dataKey="label"
-              interval="preserveStartEnd"
-              minTickGap={2}
-              tickFormatter={(l: string) => l.replace(" h", "")}
+              dataKey="mid"
+              type="number"
+              domain={[0, maxH]}
+              ticks={ticks}
+              tickFormatter={(h: number) => `${h} h`}
               label={{
                 value: "Hours between forecast publication and delivery",
                 position: "bottom",
@@ -251,7 +266,7 @@ export function HorizonChart({ data, used }: { data: Horizon; used: [number, num
             />
             <YAxis {...gwYAxis(scale, colors.muted)} />
             <Tooltip
-              cursor={{ fill: colors.grid, opacity: 0.5 }}
+              cursor={{ stroke: colors.baseline, strokeWidth: 1 }}
               content={({ active, payload }) => {
                 const b = active
                   ? (payload?.[0]?.payload as (typeof rows)[number] | undefined)
@@ -259,14 +274,15 @@ export function HorizonChart({ data, used }: { data: Horizon; used: [number, num
                 if (!b) return null;
                 return (
                   <TooltipCard
-                    title={`Forecast ${b.label} ahead`}
+                    title={`Forecasts made ${b.label} ahead`}
                     rows={[
+                      { key: "m", label: "MAE", value: fmtMW(b.mae_mw), color: colors.forecast },
                       {
-                        key: "m",
-                        label: "MAE",
-                        value: fmtMW(b.mae_mw),
+                        key: "p",
+                        label: "P50 to P90 miss",
+                        value: `${fmtMW(b.p50_abs_mw)} to ${fmtMW(b.p90_abs_mw)}`,
                         color: colors.forecast,
-                        shape: "box",
+                        shape: "band",
                       },
                       {
                         key: "b",
@@ -275,27 +291,56 @@ export function HorizonChart({ data, used }: { data: Horizon; used: [number, num
                         color: colors.secondary,
                       },
                     ]}
-                    footer={`${b.n} forecast–actual pairs${b.low_coverage ? " · low coverage: only early runs reach this far, for late hours" : ""}`}
+                    footer={`${b.n} forecast and actual pairs${b.low_coverage ? ". Fewer runs reach this far, so treat as indicative" : ""}`}
                   />
                 );
               }}
             />
-            <Bar dataKey="mae_mw" barSize={22} radius={[4, 4, 0, 0]} isAnimationActive={false}>
-              {rows.map((b) => (
-                <Cell
-                  key={b.label}
-                  fill={colors.forecast}
-                  fillOpacity={b.low_coverage ? 0.35 : 1}
-                />
-              ))}
-            </Bar>
+            <Area
+              dataKey="band"
+              type="monotone"
+              stroke="none"
+              fill={colors.forecast}
+              fillOpacity={0.12}
+              isAnimationActive={false}
+            />
+            <Line
+              dataKey="maeLow"
+              type="monotone"
+              stroke={colors.forecast}
+              strokeOpacity={0.35}
+              strokeWidth={2}
+              dot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              dataKey="maeFull"
+              type="monotone"
+              stroke={colors.forecast}
+              strokeWidth={2}
+              dot={{ r: 3, fill: colors.forecast, stroke: colors.surface, strokeWidth: 1.5 }}
+              isAnimationActive={false}
+            />
             <Line
               dataKey="bias_mw"
+              type="monotone"
               stroke={colors.secondary}
               strokeWidth={2}
               dot={false}
               isAnimationActive={false}
             />
+            {firstLow !== undefined && (
+              <ReferenceLine
+                x={firstLow}
+                stroke={colors.baseline}
+                label={{
+                  value: "fewer runs reach beyond here",
+                  position: "insideTopRight",
+                  fill: colors.muted,
+                  fontSize: 10.5,
+                }}
+              />
+            )}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

@@ -54,7 +54,7 @@ export function RunTimeline({ data }: { data: DayForecast }) {
           return (
             <div
               key={r.publish_time}
-              title={`${fmtDayShort(r.publish_time)} ${fmtTime(r.publish_time)} — ${statusText(r)}`}
+              title={`${fmtDayShort(r.publish_time)} ${fmtTime(r.publish_time)}, ${statusText(r)}`}
               className={clsx(
                 "absolute top-[23px] h-2.5 w-2.5 -translate-x-1/2 rounded-full ring-2 ring-surface",
                 r.status === "used" && "h-3.5 w-3.5 top-[21px] bg-accent",
@@ -77,7 +77,7 @@ export function RunTimeline({ data }: { data: DayForecast }) {
 function statusText(r: RunVersion) {
   if (r.status === "used") return "used (latest before the gate)";
   if (r.status === "superseded") return "available, but superseded";
-  return "published after the gate — not available";
+  return "published after the gate, not available";
 }
 
 /** How the forecast for D changed run by run on D-1; the used run is highlighted. */

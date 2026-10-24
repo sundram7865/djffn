@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { niceScale } from "./axis";
+import { fitLine } from "./stats";
 import { addDays, daysInclusive, fmtAxisGW, fmtGWh, fmtHours, fmtMW, fmtTime } from "./format";
 
 describe("fmtMW (same rules as backend fmt_mw)", () => {
@@ -25,6 +26,7 @@ describe("other formatters", () => {
   });
   it("formats energy and durations", () => {
     expect(fmtGWh(278630)).toBe("278.6 GWh");
+    expect(fmtGWh(8394967)).toBe("8,395 GWh");
     expect(fmtHours(11 / 6)).toBe("1 h 50 min");
     expect(fmtHours(0)).toBe("0 min");
     expect(fmtHours(2)).toBe("2 h");
@@ -60,5 +62,14 @@ describe("niceScale", () => {
   });
   it("ignores null values", () => {
     expect(niceScale([null, undefined, 900]).domain).toEqual([0, 1000]);
+  });
+});
+
+describe("fitLine", () => {
+  it("recovers an exact linear relationship", () => {
+    const pts = [0, 5000, 10000, 15000].map((f) => ({ f, a: 0.8 * f + 900 }));
+    const { slope, intercept } = fitLine(pts);
+    expect(slope).toBeCloseTo(0.8, 10);
+    expect(intercept).toBeCloseTo(900, 6);
   });
 });

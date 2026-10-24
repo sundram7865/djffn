@@ -5,11 +5,11 @@ Usage (from ``backend/``):
     python -m scripts.ingest              # writes data/forecasts.csv, data/actuals.csv, data/manifest.json
     python -m scripts.ingest --out /tmp/x # write somewhere else
 
-Windows fetched (see docs/DATA_NOTES.md §6 for the reasoning):
-  * WINDFOR runs published 2025-12-30T00:00Z .. 2026-02-02T00:00Z
-    - covers every run a January decision could use, plus older runs for the forecast-age analysis
-  * FUELHH (WIND) settlement dates 2026-01-01 .. 2026-02-01
-    - actuals for every delivery day decided in January (2 Jan .. 1 Feb), plus 1 Jan for context
+The snapshot keeps exactly what the analysis uses, nothing more (see docs/DATA_NOTES.md §6):
+  * WINDFOR: every run that forecasts any hour of the delivery days 2 Jan .. 1 Feb 2026.
+    Runs are published from 31 Dec (two days ahead of 2 Jan) to 1 Feb. Values for hours outside
+    the delivery window, and back-casts of hours that had already started, are dropped.
+  * FUELHH (WIND): every half-hour of the same delivery days.
 """
 
 from __future__ import annotations
@@ -17,18 +17,22 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
-from app.config import BACKEND_DIR
+from app.config import BACKEND_DIR, MARKET_TZ, settings
+from app.core.selection import delivery_day_bounds
 from app.data.cleaning import clean_fuelhh, clean_windfor
 from app.data.store import ACTUALS_FILE, FORECASTS_FILE, write_snapshot
 from app.elexon.client import BASE_URL, ElexonClient
 
-WINDFOR_PUBLISH_FROM = datetime(2025, 12, 30, tzinfo=UTC)
+# A run covers 21:00 on (publish day - 1) to 21:00 on (publish day + 2), so the earliest run that
+# reaches the first delivery day is published two days before it.
+WINDFOR_PUBLISH_FROM = datetime(2025, 12, 31, tzinfo=UTC)
 WINDFOR_PUBLISH_TO = datetime(2026, 2, 2, tzinfo=UTC)
-FUELHH_FROM = date(2026, 1, 1)
-FUELHH_TO = date(2026, 2, 1)
+FUELHH_FROM = settings.scope_first_day
+FUELHH_TO = settings.scope_last_day
+ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _sha256(path: Path) -> str:
@@ -48,19 +52,28 @@ def main() -> None:
     forecasts, fc_stats = clean_windfor(raw_fc)
     actuals, act_stats = clean_fuelhh(raw_act)
 
-    # Keep the snapshot strictly inside the requested windows.
-    forecasts = forecasts[
-        (forecasts["publish_time"] >= WINDFOR_PUBLISH_FROM)
-        & (forecasts["publish_time"] <= WINDFOR_PUBLISH_TO)
-    ].reset_index(drop=True)
+    # Keep only forecasts for hours of the delivery days in scope.
+    target_from, _ = delivery_day_bounds(settings.scope_first_day, MARKET_TZ)
+    _, target_to = delivery_day_bounds(settings.scope_last_day, MARKET_TZ)
+    in_scope = (forecasts["start_time"] >= target_from) & (forecasts["start_time"] < target_to)
+    fc_stats["outside_delivery_window_dropped"] = int((~in_scope).sum())
+    forecasts = forecasts[in_scope].reset_index(drop=True)
+    fc_stats["clean_rows"] = len(forecasts)
+    fc_stats["runs"] = int(forecasts["publish_time"].nunique())
 
     manifest = {
         "source": BASE_URL,
-        "fetched_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "fetched_at": datetime.now(UTC).strftime(ISO),
+        "delivery_days": {
+            "first": settings.scope_first_day.isoformat(),
+            "last": settings.scope_last_day.isoformat(),
+            "target_from": target_from.strftime(ISO),
+            "target_to": target_to.strftime(ISO),
+        },
         "windfor": {
             "endpoint": "/datasets/WINDFOR/stream",
-            "publish_from": WINDFOR_PUBLISH_FROM.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "publish_to": WINDFOR_PUBLISH_TO.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "publish_from": WINDFOR_PUBLISH_FROM.strftime(ISO),
+            "publish_to": WINDFOR_PUBLISH_TO.strftime(ISO),
             "resolution": "hourly",
             **fc_stats,
         },
@@ -79,9 +92,10 @@ def main() -> None:
     }
     write_snapshot(args.out, forecasts, actuals, manifest)
     logging.info(
-        "snapshot written to %s: %d forecast rows, %d actual rows",
+        "snapshot written to %s: %d forecast rows (%d runs), %d actual rows",
         args.out,
         len(forecasts),
+        fc_stats["runs"],
         len(actuals),
     )
 

@@ -23,7 +23,11 @@ export function fmtAxisGW(v: number): string {
 
 export function fmtGWh(mwh: number | null | undefined): string {
   if (mwh === null || mwh === undefined) return "–";
-  return `${(mwh / 1000).toFixed(1)} GWh`;
+  const gwh = mwh / 1000;
+  // 278.6 GWh for a day; 8,395 GWh for a month (one decimal adds noise at that size).
+  return Math.abs(gwh) >= 1000
+    ? `${Math.round(gwh).toLocaleString("en-GB")} GWh`
+    : `${gwh.toFixed(1)} GWh`;
 }
 
 export function fmtPct(v: number | null | undefined, digits = 0): string {

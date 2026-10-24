@@ -31,7 +31,7 @@ def _summary(bias: float) -> dict:  # type: ignore[type-arg]
 
 def test_numbers_in_text_are_the_computed_ones() -> None:
     s = _summary(1500)
-    out = build_insights(s, "09:20", [], [], None)
+    out = build_insights(s, "09:20", [], [])
     assert fmt_mw(s["mae_mw"]) in out["headline"]
     assert f"{s['wape_pct']:.0f}%" in out["headline"]
     text = " ".join(p["text"] for p in out["points"])
@@ -42,7 +42,7 @@ def test_numbers_in_text_are_the_computed_ones() -> None:
 
 
 def test_under_forecast_wording() -> None:
-    out = build_insights(_summary(-1500), "09:20", [], [], None)
+    out = build_insights(_summary(-1500), "09:20", [], [])
     direction = next(p for p in out["points"] if p["id"] == "direction")
     assert "ran low" in direction["text"]
 
@@ -50,10 +50,10 @@ def test_under_forecast_wording() -> None:
 def test_cutoff_alternatives_are_compared() -> None:
     s = _summary(1500)
     alts = [{"label": "Later gate", "time": "15:30", "mae_mw": s["mae_mw"] - 100}]
-    out = build_insights(s, "09:20", [], [], alts)
+    out = build_insights(s, "09:20", [], [], alternatives=alts)
     alt = next(p for p in out["points"] if p["id"] == "cutoff-15:30")
     assert "cut MAE by 100 MW" in alt["text"]
 
 
 def test_empty_summary() -> None:
-    assert build_insights({"n": 0}, "09:20", [], [], None)["points"] == []
+    assert build_insights({"n": 0}, "09:20", [], [])["points"] == []

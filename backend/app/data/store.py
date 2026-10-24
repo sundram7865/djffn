@@ -21,8 +21,8 @@ MANIFEST_FILE = "manifest.json"
 class Snapshot:
     """Immutable in-memory view of the data.
 
-    forecasts: publish_time, start_time (UTC), generation_mw — one row per (run, target hour)
-    actuals:   start_time (UTC), settlement_date, settlement_period, generation_mw — one row per half-hour
+    forecasts: publish_time, start_time (UTC), generation_mw; one row per (run, target hour)
+    actuals:   start_time (UTC), settlement_date, settlement_period, generation_mw; one row per half-hour
     """
 
     forecasts: pd.DataFrame

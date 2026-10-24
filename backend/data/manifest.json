@@ -1,39 +1,47 @@
 {
   "source": "https://data.elexon.co.uk/bmrs/api/v1",
-  "fetched_at": "2026-10-23T13:03:46Z",
+  "fetched_at": "2026-10-24T13:21:06Z",
+  "delivery_days": {
+    "first": "2026-01-02",
+    "last": "2026-02-01",
+    "target_from": "2026-01-02T00:00:00Z",
+    "target_to": "2026-02-02T00:00:00Z"
+  },
   "windfor": {
     "endpoint": "/datasets/WINDFOR/stream",
-    "publish_from": "2025-12-30T00:00:00Z",
+    "publish_from": "2025-12-31T00:00:00Z",
     "publish_to": "2026-02-02T00:00:00Z",
     "resolution": "hourly",
-    "raw_rows": 19856,
+    "raw_rows": 19272,
     "invalid_rows": 0,
     "duplicate_rows_dropped": 0,
-    "clean_rows": 19856,
-    "runs": 272,
+    "backcast_rows_dropped": 3961,
+    "clean_rows": 14383,
+    "runs": 264,
     "off_hour_start_times": 0,
-    "negative_values": 0
+    "negative_values": 0,
+    "outside_delivery_window_dropped": 928
   },
   "fuelhh": {
     "endpoint": "/datasets/FUELHH/stream",
     "fuel_type": "WIND",
-    "settlement_from": "2026-01-01",
+    "settlement_from": "2026-01-02",
     "settlement_to": "2026-02-01",
     "resolution": "half-hourly",
-    "raw_rows": 1536,
+    "raw_rows": 1488,
     "invalid_rows": 0,
     "other_fuel_rows_ignored": 0,
     "duplicate_rows_dropped": 0,
-    "clean_rows": 1536,
+    "clean_rows": 1488,
     "off_halfhour_start_times": 0,
     "missing_halfhours": 0
   },
   "files": {
     "forecasts.csv": {
-      "sha256": "2b6a92335cc09b639749ed085a6ad957a56afac9e187f8acac6873dd81858b5a"
+      "sha256": "de9bac36fb777be26a1f97c48cb6ac50b0b7cdac9bdaa4a355799f38d1b689a8"
     },
     "actuals.csv": {
-      "sha256": "bba1ec729f75343ec12bdda7976e896e093789cc6b7234ed0216259ff31e3ff3"
+      "sha256": "4d22c70ff33906fc44b80ff2e5923ca948ccb3e700ac478bf04c5521b0b72d28"
     }
   }
 }

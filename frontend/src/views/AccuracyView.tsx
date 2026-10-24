@@ -6,7 +6,10 @@ import type { CutoffSweep } from "../api/types";
 import { ByBandChart, ByHourChart, HorizonChart } from "../components/charts/Breakdowns";
 import { CutoffSweepChart } from "../components/charts/CutoffSweepChart";
 import { DailyCalendar } from "../components/charts/DailyCalendar";
+import { DailyEnergyChart } from "../components/charts/DailyEnergyChart";
+import { ErrorHeatmap } from "../components/charts/ErrorHeatmap";
 import { ErrorHistogram } from "../components/charts/ErrorHistogram";
+import { ForecastActualScatter } from "../components/charts/ForecastActualScatter";
 import { ForecastVsActualChart } from "../components/charts/ForecastVsActualChart";
 import { DataQualityPanel, InsightPanel } from "../components/panels";
 import {
@@ -19,7 +22,7 @@ import {
   Skeleton,
   StatTile,
 } from "../components/ui";
-import { fmtDateShort, fmtMW, fmtPct, fmtShare } from "../lib/format";
+import { fmtDateShort, fmtDayTime, fmtGWh, fmtMW, fmtPct, fmtShare } from "../lib/format";
 import { glossary } from "../lib/glossary";
 
 export function AccuracyView({
@@ -121,7 +124,7 @@ export function AccuracyView({
           title="Forecast vs actual"
           subtitle={
             a
-              ? `${a.range.days} delivery days · forecast as available at ${a.cutoff.time} UK on D-1 · drag the handles below to zoom`
+              ? `${a.range.days} delivery days · every half-hour of actual wind against the forecast available at ${a.cutoff.time} UK on D-1 · drag the handles below to zoom`
               : "Loading…"
           }
           info={glossary.cutoff}
@@ -130,6 +133,31 @@ export function AccuracyView({
           <div className={clsx("transition-opacity", dim && "opacity-50")}>
             <ForecastVsActualChart data={a} />
           </div>
+        ) : (
+          <ChartSkeleton height={380} />
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Every hour at a glance"
+          subtitle="Forecast error for each hour (rows) of each delivery day (columns). Red = wind fell short. Click a cell to open that day."
+          info={glossary.bias}
+        />
+        {a ? (
+          <ChartOrTable
+            dimmed={dim}
+            chart={<ErrorHeatmap data={a} onPick={onOpenDay} />}
+            table={{
+              columns: ["Hour (UK)", "Forecast", "Actual", "Forecast − actual"],
+              rows: a.series.map((p) => [
+                fmtDayTime(p.start_time),
+                fmtMW(p.forecast_mw),
+                fmtMW(p.actual_mw),
+                fmtMW(p.error_mw, { signed: true }),
+              ]),
+            }}
+          />
         ) : (
           <ChartSkeleton height={380} />
         )}
@@ -164,6 +192,23 @@ export function AccuracyView({
             <ChartSkeleton />
           )}
         </Card>
+        <Card>
+          <CardHeader
+            title="Forecast against reality"
+            subtitle="Each dot is one hour. Below the diagonal, wind came in lower than forecast."
+            info={glossary.bias}
+          />
+          {a ? (
+            <div className={clsx("transition-opacity", dim && "opacity-50")}>
+              <ForecastActualScatter data={a} />
+            </div>
+          ) : (
+            <ChartSkeleton height={320} />
+          )}
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader
             title="Error by hour of day"
@@ -214,12 +259,40 @@ export function AccuracyView({
             <ChartSkeleton height={260} />
           )}
         </Card>
+      </div>
+
+      <Card>
+        <CardHeader
+          title="Daily energy gap"
+          subtitle="Forecast energy minus delivered energy for each delivery day. Red bars are days the book was short. Click a bar to open the day."
+          info={glossary.shortfallShare}
+        />
+        {a ? (
+          <ChartOrTable
+            dimmed={dim}
+            chart={<DailyEnergyChart data={a} onPick={onOpenDay} />}
+            table={{
+              columns: ["Delivery day", "Forecast", "Delivered", "Gap (short +)"],
+              rows: a.daily_energy.map((d) => [
+                fmtDateShort(d.day),
+                fmtGWh(d.forecast_mwh),
+                fmtGWh(d.actual_mwh),
+                `${d.error_mwh > 0 ? "+" : "−"}${fmtGWh(Math.abs(d.error_mwh))}`,
+              ]),
+            }}
+          />
+        ) : (
+          <ChartSkeleton height={280} />
+        )}
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader
             title="Error vs forecast age"
             subtitle={
               a?.horizon_range_h
-                ? `All forecast versions. Your ${a.cutoff.time} cutoff uses forecasts ${a.horizon_range_h[0]}–${a.horizon_range_h[1]} h ahead.`
+                ? `All ${horizon.data?.versions_scored.toLocaleString("en-GB") ?? ""} forecast values from ${horizon.data?.runs ?? ""} runs. Your ${a.cutoff.time} cutoff uses forecasts ${a.horizon_range_h[0]} to ${a.horizon_range_h[1]} h ahead.`
                 : "All forecast versions"
             }
             info={glossary.horizon}
@@ -229,10 +302,20 @@ export function AccuracyView({
               dimmed={horizon.isFetching}
               chart={<HorizonChart data={horizon.data} used={a?.horizon_range_h ?? null} />}
               table={{
-                columns: ["Forecast age", "MAE", "Bias", "Pairs", "Coverage"],
+                columns: [
+                  "Forecast age",
+                  "MAE",
+                  "P50 miss",
+                  "P90 miss",
+                  "Bias",
+                  "Pairs",
+                  "Coverage",
+                ],
                 rows: horizon.data.buckets.map((b) => [
                   b.label,
                   fmtMW(b.mae_mw),
+                  fmtMW(b.p50_abs_mw),
+                  fmtMW(b.p90_abs_mw),
                   fmtMW(b.bias_mw, { signed: true }),
                   b.n,
                   b.low_coverage ? "low" : "full",
@@ -241,6 +324,17 @@ export function AccuracyView({
             />
           ) : horizon.isError ? (
             <ErrorState error={horizon.error} onRetry={() => horizon.refetch()} />
+          ) : (
+            <ChartSkeleton height={260} />
+          )}
+        </Card>
+        <Card>
+          <CardHeader
+            title="Daily accuracy"
+            subtitle="MAE per delivery day (GW). Click a day to see that day's forecast."
+          />
+          {a ? (
+            <DailyCalendar rows={a.by_day} onPick={onOpenDay} />
           ) : (
             <ChartSkeleton height={260} />
           )}
@@ -270,20 +364,7 @@ export function AccuracyView({
         )}
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader
-            title="Daily accuracy"
-            subtitle="MAE per delivery day (GW). Click a day to see that day's forecast."
-          />
-          {a ? (
-            <DailyCalendar rows={a.by_day} onPick={onOpenDay} />
-          ) : (
-            <ChartSkeleton height={260} />
-          )}
-        </Card>
-        {a ? <DataQualityPanel dq={a.data_quality} /> : <Skeleton className="h-60" />}
-      </div>
+      {a ? <DataQualityPanel dq={a.data_quality} /> : <Skeleton className="h-60" />}
     </div>
   );
 }

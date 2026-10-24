@@ -100,10 +100,13 @@ def horizon(
     response: Response,
     start: date | None = None,
     end: date | None = None,
+    bucket_h: Annotated[
+        int | None, Query(ge=1, le=12, description="Bucket width in hours (default 6)")
+    ] = None,
 ) -> dict[str, Any]:
     """Error vs forecast age, using every forecast version (not only the selected one)."""
     response.headers["Cache-Control"] = CACHE_HEADER
-    return analyzer.horizon(*_range(start, end))
+    return analyzer.horizon(*_range(start, end), bucket_h)
 
 
 @router.get("/cutoffs", response_model=CutoffSweepResponse)

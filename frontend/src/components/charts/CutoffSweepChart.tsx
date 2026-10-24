@@ -95,7 +95,7 @@ export function CutoffSweepChart({
                     ]}
                     footer={
                       p.n < (rows[rows.length - 1]?.n ?? p.n)
-                        ? `${p.n} hours covered — earliest runs miss late hours of D`
+                        ? `${p.n} hours covered: early runs miss the last hours of D`
                         : "Click to use this cutoff"
                     }
                   />

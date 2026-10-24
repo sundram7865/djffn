@@ -2,10 +2,10 @@
 
 export const glossary = {
   cutoff:
-    "The moment the buying decision is locked in on the day before delivery (D-1). Only forecasts published at or before this time are used — later updates did not exist yet when you had to bid.",
+    "The moment the buying decision is locked in on the day before delivery (D-1). Only forecasts published at or before this time are used. Later updates did not exist yet when you had to bid.",
   mae: "Mean absolute error: the typical size of a miss in MW, regardless of direction. If MAE is 2 GW, the forecast was on average 2 GW away from what wind actually produced.",
   rmse: "Root-mean-square error: like MAE but penalises big misses more. When RMSE is much larger than MAE, a few hours had very large errors.",
-  bias: "Average signed error (forecast − actual). Positive means the forecast was too high on average — wind under-delivered, leaving you short.",
+  bias: "Average signed error (forecast − actual). Positive means the forecast was too high on average: wind under-delivered, leaving you short.",
   wape: "Total absolute error as a share of total wind energy. A robust 'percent error' that does not blow up when wind is low.",
   mape: "Mean absolute percentage error. Unreliable when wind output is near zero (tiny denominators inflate it); hours below 500 MW are excluded. Prefer WAPE.",
   buffer:

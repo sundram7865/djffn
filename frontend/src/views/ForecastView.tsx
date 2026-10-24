@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useDayForecast } from "../api/hooks";
 import type { DayForecast } from "../api/types";
 import { DayForecastChart } from "../components/charts/DayForecastChart";
+import { ForecastEvolutionChart } from "../components/charts/ForecastEvolutionChart";
 import { RunTimeline, RunVersionsChart } from "../components/charts/RunVersionsChart";
 import { DataQualityPanel } from "../components/panels";
 import {
@@ -75,44 +76,82 @@ export function ForecastView({ day, cutoff }: { day: string; cutoff: string }) {
         )}
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <Card>
-          <CardHeader
-            title="Why this forecast?"
-            subtitle="Every forecast run published on the decision day, against the gate. Only runs before the gate were available."
-          />
-          {data ? (
-            <ChartOrTable
-              dimmed={fetching}
-              chart={
-                <>
-                  <RunTimeline data={data} />
-                  <RunVersionsChart data={data} showActual={reveal} />
-                </>
-              }
-              table={{
-                columns: [
-                  "Run published (UK)",
-                  "Status",
-                  "Mean forecast",
-                  ...(reveal ? ["MAE vs actual"] : []),
-                ],
-                rows: data.run_timeline.map((r) => [
-                  `${fmtDayShort(r.publish_time)} ${fmtTime(r.publish_time)}`,
-                  r.status === "used"
-                    ? "Used"
-                    : r.status === "superseded"
-                      ? "Superseded"
-                      : "After gate",
-                  fmtMW(r.values.reduce((s, v) => s + v.forecast_mw, 0) / r.values.length),
-                  ...(reveal ? [fmtMW(r.mae_mw)] : []),
-                ]),
-              }}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div className="flex flex-col gap-4">
+          <Card>
+            <CardHeader
+              title="Why this forecast?"
+              subtitle="Every forecast run published on the decision day, against the gate. Only runs before the gate were available."
             />
-          ) : (
-            <ChartSkeleton height={300} />
-          )}
-        </Card>
+            {data ? (
+              <ChartOrTable
+                dimmed={fetching}
+                chart={
+                  <>
+                    <RunTimeline data={data} />
+                    <RunVersionsChart data={data} showActual={reveal} />
+                  </>
+                }
+                table={{
+                  columns: [
+                    "Run published (UK)",
+                    "Status",
+                    "Mean forecast",
+                    ...(reveal ? ["MAE vs actual"] : []),
+                  ],
+                  rows: data.run_timeline.map((r) => [
+                    `${fmtDayShort(r.publish_time)} ${fmtTime(r.publish_time)}`,
+                    r.status === "used"
+                      ? "Used"
+                      : r.status === "superseded"
+                        ? "Superseded"
+                        : "After gate",
+                    fmtMW(r.values.reduce((s, v) => s + v.forecast_mw, 0) / r.values.length),
+                    ...(reveal ? [fmtMW(r.mae_mw)] : []),
+                  ]),
+                }}
+              />
+            ) : (
+              <ChartSkeleton height={300} />
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="How the forecast for this day evolved"
+              subtitle="Every run published in the two days before delivery. Reveal the actual to see how far off each run was."
+              info={glossary.horizon}
+            />
+            {data ? (
+              <ChartOrTable
+                dimmed={fetching}
+                chart={<ForecastEvolutionChart data={data} showActual={reveal} />}
+                table={{
+                  columns: [
+                    "Run published (UK)",
+                    "Status",
+                    "Hours before delivery",
+                    "Average forecast",
+                    ...(reveal ? ["MAE vs actual"] : []),
+                  ],
+                  rows: data.evolution.runs.map((r) => [
+                    `${fmtDayShort(r.publish_time)} ${fmtTime(r.publish_time)}`,
+                    r.status === "used"
+                      ? "Used"
+                      : r.status === "superseded"
+                        ? "Older"
+                        : "After gate",
+                    fmtHours(r.lead_h),
+                    fmtMW(r.mean_forecast_mw),
+                    ...(reveal ? [fmtMW(r.mae_mw)] : []),
+                  ]),
+                }}
+              />
+            ) : (
+              <ChartSkeleton height={260} />
+            )}
+          </Card>
+        </div>
 
         <div className="flex flex-col gap-4">
           {data ? <PositionGuidance data={data} /> : <Skeleton className="h-48" />}

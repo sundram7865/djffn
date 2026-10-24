@@ -21,37 +21,51 @@ interface Row {
   t: number;
   forecast: number | null;
   actual: number | null;
-  error: number | null;
   short: [number, number] | null;
   surplus: [number, number] | null;
+  scored: number | null;
 }
 
-const DAY = 86_400_000;
+const HOUR = 3_600_000;
+const HALF = HOUR / 2;
+const DAY = 24 * HOUR;
 
 /**
- * Forecast vs actual with the error band between them, split by sign: red where wind fell short
- * of the forecast (buyer short), grey where it beat the forecast. Zero-height segments (instead
- * of gaps) keep each band continuous so step blocks render their full width.
+ * Forecast vs actual at half-hour resolution: every FUELHH reading is drawn, with the hourly
+ * forecast held across both half-hours of its hour. The band between the two lines is the miss:
+ * red where wind fell short of the forecast (buyer short), grey where it beat it. Zero-height
+ * segments (instead of gaps) keep each band continuous so step blocks render their full width.
  */
 export function ForecastVsActualChart({ data }: { data: Accuracy }) {
   const { colors } = useTheme();
-  const rows = useMemo<Row[]>(
-    () =>
-      data.series.map((p) => {
-        const f = p.forecast_mw;
-        const a = p.actual_mw;
-        const both = f !== null && a !== null;
-        return {
-          t: Date.parse(p.start_time),
-          forecast: f,
-          actual: a,
-          error: p.error_mw,
-          short: both ? (f > a ? [a, f] : [a, a]) : null,
-          surplus: both ? (a > f ? [f, a] : [f, f]) : null,
-        };
-      }),
-    [data.series],
-  );
+
+  const rows = useMemo<Row[]>(() => {
+    const fc = new Map(data.series.map((p) => [Date.parse(p.start_time), p]));
+    const act = new Map(
+      data.actuals_halfhourly.map((a) => [Date.parse(a.start_time), a.actual_mw]),
+    );
+    const times = [...new Set([...fc.keys(), ...act.keys()])].sort((a, b) => a - b);
+    if (!times.length) return [];
+    const out: Row[] = [];
+    const first = times[0];
+    const last = times[times.length - 1] + HALF;
+    for (let t = first; t <= last; t += HALF) {
+      const hour = fc.get(t - (t % HOUR));
+      const f = hour?.forecast_mw ?? null;
+      // Closing point at the very end so the last half-hour block is drawn in full.
+      const a = act.get(t) ?? (t === last ? (act.get(t - HALF) ?? null) : null);
+      const both = f !== null && a !== null;
+      out.push({
+        t,
+        forecast: f ?? (t === last ? (fc.get(t - HOUR)?.forecast_mw ?? null) : null),
+        actual: a,
+        short: both ? (f > a ? [a, f] : [a, a]) : null,
+        surplus: both ? (a > f ? [f, a] : [f, f]) : null,
+        scored: t % HOUR === 0 ? (hour?.error_mw ?? null) : null,
+      });
+    }
+    return out;
+  }, [data.series, data.actuals_halfhourly]);
 
   const first = rows[0]?.t ?? 0;
   const last = rows[rows.length - 1]?.t ?? 0;
@@ -65,13 +79,13 @@ export function ForecastVsActualChart({ data }: { data: Accuracy }) {
     <div>
       <Legend
         items={[
-          { label: "Forecast at cutoff", color: colors.forecast },
-          { label: "Actual", color: colors.actual },
-          { label: "Shortfall (wind below forecast)", color: colors.short, shape: "band" },
-          { label: "Surplus (wind above forecast)", color: colors.surplus, shape: "band" },
+          { label: "Forecast at cutoff (hourly)", color: colors.forecast },
+          { label: "Actual (every half-hour)", color: colors.actual },
+          { label: "Shortfall: wind below forecast", color: colors.short, shape: "band" },
+          { label: "Surplus: wind above forecast", color: colors.surplus, shape: "band" },
         ]}
       />
-      <div className="h-[380px] px-2 pb-2 pt-2">
+      <div className="h-[400px] px-2 pb-2 pt-2">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={rows} margin={{ top: 24, right: 20, bottom: 4, left: 4 }}>
             <CartesianGrid vertical={false} stroke={colors.grid} />
@@ -90,6 +104,8 @@ export function ForecastVsActualChart({ data }: { data: Accuracy }) {
               content={({ active, payload }) => {
                 const row = active ? (payload?.[0]?.payload as Row | undefined) : undefined;
                 if (!row) return null;
+                const gap =
+                  row.forecast !== null && row.actual !== null ? row.forecast - row.actual : null;
                 return (
                   <TooltipCard
                     title={`${fmtDayTime(new Date(row.t).toISOString())} UK`}
@@ -103,16 +119,17 @@ export function ForecastVsActualChart({ data }: { data: Accuracy }) {
                       { key: "a", label: "actual", value: fmtMW(row.actual), color: colors.actual },
                     ]}
                     footer={
-                      row.error === null ? (
-                        "Not scored (missing data)"
+                      gap === null ? (
+                        "Missing data for this half-hour"
                       ) : (
                         <span>
-                          <strong className="text-ink">{fmtMW(Math.abs(row.error))}</strong>{" "}
-                          {row.error > 0
-                            ? "shortfall — wind under-delivered"
-                            : row.error < 0
-                              ? "surplus — wind over-delivered"
+                          <strong className="text-ink">{fmtMW(Math.abs(gap))}</strong>{" "}
+                          {gap > 0
+                            ? "shortfall: wind under-delivered"
+                            : gap < 0
+                              ? "surplus: wind over-delivered"
                               : "exact"}
+                          {row.scored !== null && " (scored hour)"}
                         </span>
                       )
                     }
@@ -125,7 +142,7 @@ export function ForecastVsActualChart({ data }: { data: Accuracy }) {
               type="stepAfter"
               stroke="none"
               fill={colors.short}
-              fillOpacity={0.28}
+              fillOpacity={0.3}
               isAnimationActive={false}
             />
             <Area
@@ -133,14 +150,14 @@ export function ForecastVsActualChart({ data }: { data: Accuracy }) {
               type="stepAfter"
               stroke="none"
               fill={colors.surplus}
-              fillOpacity={0.45}
+              fillOpacity={0.5}
               isAnimationActive={false}
             />
             <Line
               dataKey="actual"
               type="stepAfter"
               stroke={colors.actual}
-              strokeWidth={1.5}
+              strokeWidth={1.25}
               dot={false}
               isAnimationActive={false}
             />
@@ -152,7 +169,7 @@ export function ForecastVsActualChart({ data }: { data: Accuracy }) {
               dot={false}
               isAnimationActive={false}
             />
-            {rows.length > 72 && (
+            {rows.length > 144 && (
               <Brush
                 dataKey="t"
                 height={26}

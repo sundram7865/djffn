@@ -65,10 +65,28 @@ export interface BandRange {
   n: number;
 }
 
+export interface EvolutionRun {
+  publish_time: string;
+  status: "used" | "superseded" | "after_cutoff";
+  lead_h: number;
+  mean_forecast_mw: number;
+  mae_mw: number | null;
+  bias_mw: number | null;
+}
+
+export interface Evolution {
+  hours: number;
+  first_hour: string | null;
+  last_hour: string | null;
+  actual_mean_mw: number | null;
+  runs: EvolutionRun[];
+}
+
 export interface DayForecast {
   delivery_day: string;
   cutoff: CutoffInfo;
   run_timeline: RunVersion[];
+  evolution: Evolution;
   runs_used: { publish_time: string; hours: number; age_at_cutoff_h: number }[];
   points: DayPoint[];
   actuals_halfhourly: { start_time: string; actual_mw: number }[];
@@ -117,6 +135,7 @@ export interface GroupStat {
   mae_mw: number;
   rmse_mw: number;
   bias_mw: number;
+  p50_abs_mw: number;
   p90_abs_mw: number;
   p10_signed_mw: number;
   p90_signed_mw: number;
@@ -142,12 +161,30 @@ export interface Accuracy {
     actual_mw: number | null;
     error_mw: number | null;
   }[];
+  actuals_halfhourly: { start_time: string; actual_mw: number }[];
+  daily_energy: DailyEnergy[];
+  energy: {
+    forecast_mwh: number;
+    actual_mwh: number;
+    error_mwh: number;
+    error_pct: number | null;
+    short_days: number;
+    days: number;
+  } | null;
   histogram: { lo_mw: number; hi_mw: number; count: number }[];
   by_hour: GroupStat[];
   by_band: GroupStat[];
   by_day: GroupStat[];
   insights: Insights;
   data_quality: DataQuality;
+}
+
+export interface DailyEnergy {
+  day: string;
+  forecast_mwh: number;
+  actual_mwh: number;
+  error_mwh: number;
+  hours: number;
 }
 
 export interface HorizonBucket extends Omit<GroupStat, "key" | "label"> {
@@ -162,6 +199,7 @@ export interface Horizon {
   bucket_h: number;
   buckets: HorizonBucket[];
   versions_scored: number;
+  runs: number;
 }
 
 export interface SweepPoint {

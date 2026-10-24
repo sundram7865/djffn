@@ -121,6 +121,7 @@ def group_summary(df: pd.DataFrame, key: str) -> list[dict[str, Any]]:
                 "mae_mw": _f(np.abs(e).mean()),
                 "rmse_mw": _f(np.sqrt(np.mean(e**2))),
                 "bias_mw": _f(e.mean()),
+                "p50_abs_mw": _f(np.percentile(np.abs(e), 50)),
                 "p90_abs_mw": _f(np.percentile(np.abs(e), 90)),
                 "p10_signed_mw": _f(np.percentile(e, 10)),
                 "p90_signed_mw": _f(np.percentile(e, 90)),

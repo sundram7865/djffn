@@ -1,4 +1,5 @@
-# One image runs the whole product: FastAPI serves the JSON API and the built React app.
+# Single-container image (used by Heroku via heroku.yml): FastAPI serves the API and the built
+# React app on one port. For local use, docker-compose.yml runs frontend and backend separately.
 
 # ---- 1. Build the React frontend -------------------------------------------------------------
 FROM node:22-slim AS web

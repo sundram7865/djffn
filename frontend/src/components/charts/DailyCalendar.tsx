@@ -45,7 +45,7 @@ export function DailyCalendar({
               key={d}
               type="button"
               onClick={() => onPick(d)}
-              title={`${fmtDateShort(d)}: MAE ${fmtMW(r.mae_mw)}, bias ${fmtMW(r.bias_mw, { signed: true })} — open this day`}
+              title={`${fmtDateShort(d)}: MAE ${fmtMW(r.mae_mw)}, bias ${fmtMW(r.bias_mw, { signed: true })}. Click to open this day`}
               className={clsx(
                 "flex h-14 flex-col items-start justify-between rounded-md px-1.5 py-1 text-left transition-transform hover:scale-[1.04] focus-visible:outline-2 focus-visible:outline-accent",
                 darkText ? "text-[#0b0b0b]" : "text-white",

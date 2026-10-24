@@ -1,8 +1,21 @@
-# One-command local start:  docker compose up --build   ->  http://localhost:8000
+# One command starts both services:
+#   docker compose up -d --build
+#   frontend (website)  -> http://localhost:3000
+#   backend  (API)      -> http://localhost:8000/api/docs
 services:
-  winddesk:
-    build: .
-    image: winddesk:latest
+  backend:
+    build: ./backend
+    image: winddesk-backend:latest
     ports:
       - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: winddesk-frontend:latest
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
     restart: unless-stopped

@@ -43,6 +43,7 @@ export const api = {
     get<DayForecast>("/api/forecast", { date, cutoff }),
   accuracy: (start: string, end: string, cutoff: string) =>
     get<Accuracy>("/api/accuracy", { start, end, cutoff }),
-  horizon: (start: string, end: string) => get<Horizon>("/api/horizon", { start, end }),
+  horizon: (start: string, end: string, bucketH = 3) =>
+    get<Horizon>("/api/horizon", { start, end, bucket_h: String(bucketH) }),
   cutoffs: (start: string, end: string) => get<CutoffSweep>("/api/cutoffs", { start, end }),
 };

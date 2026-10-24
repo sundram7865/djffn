@@ -23,6 +23,12 @@ def fmt_mw(v: float, signed: bool = False) -> str:
     return f"{sign}{body}"
 
 
+def fmt_gwh(mwh: float) -> str:
+    """253626 MWh -> '254 GWh'; 25004 -> '25.0 GWh'."""
+    gwh = mwh / 1000
+    return f"{gwh:,.0f} GWh" if gwh >= 100 else f"{gwh:.1f} GWh"
+
+
 def fmt_pct(v: float, digits: int = 0) -> str:
     return f"{v:.{digits}f}%"
 
@@ -32,11 +38,15 @@ def build_insights(
     cutoff: str,
     by_band: list[dict[str, Any]],
     by_hour: list[dict[str, Any]],
+    *,
     alternatives: list[dict[str, Any]] | None = None,
+    energy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return ``{"headline": str, "points": [{"id", "text", "tone"}], "buffer_mw": float}``.
 
     ``alternatives``: other cutoffs as ``{"label", "time", "mae_mw"}`` to compare against.
+    ``energy``: period totals ``{"forecast_mwh", "actual_mwh", "error_mwh", "error_pct",
+    "short_days", "days"}``.
     """
     if not summary or summary.get("n", 0) == 0:
         return {
@@ -124,6 +134,20 @@ def build_insights(
                 "text": f"Largest errors at {int(worst['key']):02d}:00 UK time (MAE "
                 f"{fmt_mw(worst['mae_mw'])}), smallest at {int(best['key']):02d}:00 "
                 f"({fmt_mw(best['mae_mw'])}).",
+            }
+        )
+
+    if energy and energy.get("error_pct") is not None and energy["days"] > 1:
+        missing = energy["error_mwh"]
+        points.append(
+            {
+                "id": "energy",
+                "tone": "warning" if missing > 0 else "info",
+                "text": f"Over the {energy['days']} days, wind delivered "
+                f"{fmt_gwh(energy['actual_mwh'])} against {fmt_gwh(energy['forecast_mwh'])} "
+                f"forecast: {fmt_gwh(abs(missing))} {'less' if missing > 0 else 'more'} "
+                f"({fmt_pct(abs(energy['error_pct']))}). The forecast was too high on "
+                f"{energy['short_days']} of {energy['days']} days.",
             }
         )
 

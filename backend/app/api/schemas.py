@@ -103,10 +103,28 @@ class RunVersion(BaseModel):
     values: list[RunValue]
 
 
+class EvolutionRun(BaseModel):
+    publish_time: str
+    status: str
+    lead_h: float = Field(description="Hours between publication and the start of the delivery day")
+    mean_forecast_mw: float
+    mae_mw: float | None
+    bias_mw: float | None
+
+
+class Evolution(BaseModel):
+    hours: int = Field(description="Hours of the day covered by every run (the comparison window)")
+    first_hour: str | None
+    last_hour: str | None
+    actual_mean_mw: float | None
+    runs: list[EvolutionRun]
+
+
 class DayForecastResponse(BaseModel):
     delivery_day: str
     cutoff: CutoffInfo
     run_timeline: list[RunVersion]
+    evolution: Evolution
     runs_used: list[RunUsed]
     points: list[DayPoint]
     actuals_halfhourly: list[HalfHourActual]
@@ -162,6 +180,7 @@ class GroupStat(BaseModel):
     mae_mw: float | None
     rmse_mw: float | None
     bias_mw: float | None
+    p50_abs_mw: float | None
     p90_abs_mw: float | None
     p10_signed_mw: float | None
     p90_signed_mw: float | None
@@ -188,12 +207,32 @@ class Range(BaseModel):
     days: int
 
 
+class DailyEnergy(BaseModel):
+    day: str
+    forecast_mwh: float
+    actual_mwh: float = Field(description="From both half-hours of each forecast hour")
+    error_mwh: float = Field(description="forecast - actual; positive = wind energy shortfall")
+    hours: int
+
+
+class EnergyTotals(BaseModel):
+    forecast_mwh: float
+    actual_mwh: float
+    error_mwh: float
+    error_pct: float | None
+    short_days: int
+    days: int
+
+
 class AccuracyResponse(BaseModel):
     range: Range
     cutoff: CutoffInfo
     summary: ErrorSummary
     horizon_range_h: list[float] | None
     series: list[SeriesPoint]
+    actuals_halfhourly: list[HalfHourActual]
+    daily_energy: list[DailyEnergy]
+    energy: EnergyTotals | None
     histogram: list[HistBin]
     by_hour: list[GroupStat]
     by_band: list[GroupStat]
@@ -210,6 +249,7 @@ class HorizonBucket(BaseModel):
     mae_mw: float | None
     rmse_mw: float | None
     bias_mw: float | None
+    p50_abs_mw: float | None
     p90_abs_mw: float | None
     p10_signed_mw: float | None
     p90_signed_mw: float | None
@@ -223,6 +263,7 @@ class HorizonResponse(BaseModel):
     bucket_h: int
     buckets: list[HorizonBucket]
     versions_scored: int
+    runs: int
 
 
 class SweepPoint(BaseModel):

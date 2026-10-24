@@ -206,3 +206,63 @@ def test_validation_errors(client: TestClient, path: str, params: dict[str, str]
 
 def test_unknown_api_path_is_404(client: TestClient) -> None:
     assert client.get("/api/nope").status_code == 404
+
+
+def test_daily_energy_matches_independent_calculation(client: TestClient) -> None:
+    """Forecast energy = sum of hourly MW; actual energy = sum of half-hourly MW / 2."""
+    parse = lambda s: datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    with open(settings.data_dir / "actuals.csv", encoding="utf-8") as fh:
+        act = [(parse(r["start_time"]), float(r["generation_mw"])) for r in csv.DictReader(fh)]
+    body = client.get("/api/accuracy").json()
+    pairs = independent_scores(9, 20)
+    assert len(body["daily_energy"]) == 31
+    jan15 = next(d for d in body["daily_energy"] if d["day"] == "2026-01-15")
+    jan15_actual = sum(v for t, v in act if t.date() == date(2026, 1, 15)) / 2
+    assert jan15["actual_mwh"] == pytest.approx(jan15_actual)
+    total_fc = sum(f for f, _ in pairs)
+    assert body["energy"]["forecast_mwh"] == pytest.approx(total_fc)
+    assert body["energy"]["actual_mwh"] == pytest.approx(sum(v for _, v in act) / 2)
+    energy_point = next(p for p in body["insights"]["points"] if p["id"] == "energy")
+    assert "less" in energy_point["text"]
+
+
+def test_forecast_evolution_compares_runs_like_for_like(client: TestClient) -> None:
+    body = client.get("/api/forecast", params={"date": "2026-01-15"}).json()
+    evo = body["evolution"]
+    runs = evo["runs"]
+    # Runs from D-2 (13 Jan) and D-1 (14 Jan); D-2 runs stop at 21:00, so 22 common hours.
+    assert len(runs) == 16
+    assert {r["publish_time"][:10] for r in runs} == {"2026-01-13", "2026-01-14"}
+    assert evo["hours"] == 22
+    assert (evo["first_hour"], evo["last_hour"]) == ("2026-01-15T00:00:00Z", "2026-01-15T21:00:00Z")
+    assert [r["status"] for r in runs].count("used") == 1
+    used = next(r for r in runs if r["status"] == "used")
+    assert used["publish_time"] == "2026-01-14T07:30:00Z"
+    common = [p for p in body["points"] if p["start_time"] <= evo["last_hour"]]
+    assert used["mean_forecast_mw"] == pytest.approx(
+        sum(p["forecast_mw"] for p in common) / len(common)
+    )
+    assert evo["actual_mean_mw"] == pytest.approx(sum(p["actual_mw"] for p in common) / len(common))
+    assert all(r["lead_h"] > 0 for r in runs)
+
+
+def test_horizon_bucket_width_is_configurable(client: TestClient) -> None:
+    body = client.get("/api/horizon", params={"bucket_h": 3}).json()
+    assert body["bucket_h"] == 3
+    assert body["buckets"][0]["label"] == "0–3 h"
+    assert client.get("/api/horizon", params={"bucket_h": 0}).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/meta",
+        "/api/forecast?date=2026-01-15",
+        "/api/forecast?date=2026-01-20&cutoff=00:00",
+        "/api/accuracy",
+        "/api/horizon",
+        "/api/cutoffs",
+    ],
+)
+def test_no_em_dashes_in_any_response(client: TestClient, path: str) -> None:
+    assert chr(0x2014) not in client.get(path).text  # no em dashes in user-facing text

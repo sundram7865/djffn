@@ -46,6 +46,10 @@ def clean_windfor(raw: list[dict[str, Any]]) -> tuple[pd.DataFrame, dict[str, in
     # Chunked fetches overlap at boundaries; keep one row per version/target.
     df = df.drop_duplicates(subset=["publish_time", "start_time"], keep="last")
     dups = before - len(df)
+    # Each run also restates hours that had already started when it was published. Those are
+    # back-casts, not forecasts, and can never inform a decision, so they are not kept.
+    backcast = df["start_time"] <= df["publish_time"]
+    df = df[~backcast]
     off_grid = int((df["start_time"].dt.minute != 0).sum())
     negative = int((df["generation_mw"] < 0).sum())
     df = df.sort_values(["publish_time", "start_time"]).reset_index(drop=True)
@@ -53,6 +57,7 @@ def clean_windfor(raw: list[dict[str, Any]]) -> tuple[pd.DataFrame, dict[str, in
         "raw_rows": len(raw),
         "invalid_rows": invalid,
         "duplicate_rows_dropped": dups,
+        "backcast_rows_dropped": int(backcast.sum()),
         "clean_rows": len(df),
         "runs": int(df["publish_time"].nunique()),
         "off_hour_start_times": off_grid,
